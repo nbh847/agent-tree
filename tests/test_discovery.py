@@ -76,6 +76,28 @@ def run_discover(
 
 
 class IdentifyTests(unittest.TestCase):
+    def test_pi_executable_start_command_and_package_wrappers(self):
+        cases = [("", ("/usr/local/bin/pi",), discovery.CONFIDENCE_HIGH),
+                 ("FOO=1 pi --resume", (), discovery.CONFIDENCE_MEDIUM),
+                 ("", ("node", "/opt/bin/pi"), discovery.CONFIDENCE_MEDIUM)]
+        for package in ("@mariozechner/pi-coding-agent", "@earendil-works/pi-coding-agent"):
+            for entry in ("dist/cli.js", "dist/bundle/cli.js"):
+                cases.append(("", ("node", f"/opt/node_modules/{package}/{entry}"), discovery.CONFIDENCE_MEDIUM))
+        for command, argv, expected in cases:
+            with self.subTest(command=command, argv=argv):
+                signature, confidence, _ = discovery.identify(command, [make_proc(100, 1, *argv)] if argv else [])
+                self.assertIs(signature.kind, AgentKind.PI)
+                self.assertEqual((signature.display_name, signature.marker), ("Pi", "P"))
+                self.assertEqual(confidence, expected)
+
+    def test_pi_text_and_other_cli_scripts_are_not_agents(self):
+        for argv in (("echo", "pi"), ("pi-helper",), ("node", "/opt/other/dist/cli.js"),
+                     ("node", "/opt/@earendil-works/pi-coding-agent/dist/cli.js.bak"),
+                     ("grep", "/opt/@earendil-works/pi-coding-agent/dist/bundle/cli.js")):
+            with self.subTest(argv=argv):
+                signature, _, _ = discovery.identify(" ".join(argv), [make_proc(100, 1, *argv)])
+                self.assertIsNone(signature)
+
     def test_codebuddy_commands_and_node_wrapper(self):
         for name in ("codebuddy", "cbc", "codebuddy-code"):
             with self.subTest(name=name):
@@ -133,6 +155,16 @@ class IdentifyTests(unittest.TestCase):
 
 
 class DiscoverTests(unittest.TestCase):
+    def test_detached_pi_is_found_and_disappears_after_exit(self):
+        pane = make_pane(pid=100, attached=0)
+        shell = make_proc(100, 1, "zsh")
+        procs = {100: shell, 101: make_proc(101, 100, "node", "/opt/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js")}
+        sessions = run_discover([pane], procs, only_attached=True, keep_sessions=set())
+        self.assertEqual(len(sessions), 1)
+        self.assertIs(sessions[0].agent, AgentKind.PI)
+        self.assertEqual(sessions[0].state, PaneState.UNKNOWN)
+        self.assertEqual(run_discover([pane], {100: shell}, only_attached=True), [])
+
     def test_detached_codebuddy_is_found_and_disappears_after_exit(self):
         pane = make_pane(pid=100, attached=0)
         shell = make_proc(100, 1, "zsh")

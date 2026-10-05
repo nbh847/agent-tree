@@ -51,6 +51,7 @@ AGENT_SIGNATURES: tuple[AgentSignature, ...] = (
     AgentSignature(AgentKind.CLAUDE_CODE, "Claude Code", "C", frozenset({"claude", "claude-code"})),
     AgentSignature(AgentKind.CODEX, "Codex", "O", frozenset({"codex"})),
     AgentSignature(AgentKind.CODEBUDDY, "CodeBuddy", "B", frozenset({"codebuddy", "cbc", "codebuddy-code"})),
+    AgentSignature(AgentKind.PI, "Pi", "P", frozenset({"pi"})),
 )
 
 UNKNOWN_DISPLAY_NAME = "未知"
@@ -109,6 +110,13 @@ def identify(
         for token in proc.argv[1:]:
             if "/" not in token:
                 continue
+            # npm 的 pi 入口解析为 cli.js；只接受该包的明确入口路径。
+            if proc.exe_name in {"node", "bun"} and any(
+                token.endswith(f"/{package}/{entry}")
+                for package in ("@mariozechner/pi-coding-agent", "@earendil-works/pi-coding-agent")
+                for entry in ("dist/cli.js", "dist/bundle/cli.js")
+            ):
+                return _match_signature("pi"), CONFIDENCE_MEDIUM, f"进程参数 {token}"
             signature = _match_signature(_basename(token))
             if signature is not None:
                 return signature, CONFIDENCE_MEDIUM, f"进程参数 {token}"

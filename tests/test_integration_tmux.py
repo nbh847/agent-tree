@@ -404,9 +404,9 @@ class FollowIntegrationTests(unittest.TestCase):
                 if until is not None and until(data) and time.monotonic() - last_output >= 0.3:
                     break
             return data
-        kinds = (AgentKind.CODEX, AgentKind.CLAUDE_CODE, AgentKind.CODEBUDDY, AgentKind.SHELL)
+        kinds = (AgentKind.CODEX, AgentKind.CLAUDE_CODE, AgentKind.CODEBUDDY, AgentKind.PI, AgentKind.SHELL)
         frame = output(20, until=lambda data: all(payload(kind).encode() in data for kind in kinds)
-                       and data.count(b"U=1,q=2") == 4 and PLACEHOLDER.encode() in data)
+                       and data.count(b"U=1,q=2") == 5 and PLACEHOLDER.encode() in data)
         for kind in kinds:
             self.assertEqual(frame.count(payload(kind).encode()), 1, f"{kind.value} PNG 只上传一次")
         self.assertEqual(self.tmux.run("show-options", "-p", "-t", side,
@@ -416,7 +416,7 @@ class FollowIntegrationTests(unittest.TestCase):
         self.assertEqual(self.tmux.run("show-options", "-p", "-t", first,
                                       "allow-passthrough").stdout.strip(), "")
         image_ids = re.findall(rb"_Ga=t,f=100,t=d,i=(\d+),q=2;", frame)
-        self.assertEqual(len(set(image_ids)), 4)
+        self.assertEqual(len(set(image_ids)), 5)
         self.assertIn(PLACEHOLDER, self.capture(side), "tmux 必须保存图片位置标记")
         self.tmux.run("send-keys", "-t", side, "j")
         selected = output(1)

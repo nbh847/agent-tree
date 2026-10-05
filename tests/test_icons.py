@@ -10,7 +10,7 @@ from agent_tree.model import AgentKind
 
 class IconTests(unittest.TestCase):
     def test_assets_are_small_png_thumbnails(self):
-        for kind in (AgentKind.CODEX, AgentKind.CLAUDE_CODE, AgentKind.CODEBUDDY, AgentKind.SHELL):
+        for kind in (AgentKind.CODEX, AgentKind.CLAUDE_CODE, AgentKind.CODEBUDDY, AgentKind.PI, AgentKind.SHELL):
             data = base64.b64decode(payload(kind), validate=True)
             self.assertEqual(data[:8], b"\x89PNG\r\n\x1a\n")
             self.assertEqual(struct.unpack(">II", data[16:24]), (32, 48))

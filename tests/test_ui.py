@@ -117,7 +117,7 @@ class CurrentPaneUITests(unittest.IsolatedAsyncioTestCase):
                 display(screen, frame)
 
             write_images()
-            self.assertEqual(driver.write.call_count, 4)
+            self.assertEqual(driver.write.call_count, 5)
             driver.reset_mock()
             with patch.object(app, "_paint_images", side_effect=write_images), patch.object(
                 app, "_display", side_effect=record
@@ -165,9 +165,9 @@ class CurrentPaneUITests(unittest.IsolatedAsyncioTestCase):
                 with patch.object(ui.App, "_display", side_effect=lambda *args: driver.write("TEXT_FRAME")):
                     app._display(app.screen, frame)
                     writes = [call.args[0] for call in driver.write.call_args_list]
-                    self.assertEqual(len(writes), 5)
-                    self.assertTrue(all("a=t,f=100" in write for write in writes[:4]))
-                    self.assertEqual(writes[4], "TEXT_FRAME")
+                    self.assertEqual(len(writes), 6)
+                    self.assertTrue(all("a=t,f=100" in write for write in writes[:5]))
+                    self.assertEqual(writes[5], "TEXT_FRAME")
                     driver.reset_mock()
                     app._display(app.screen, frame)
                     self.assertEqual([call.args[0] for call in driver.write.call_args_list], ["TEXT_FRAME"])
@@ -214,16 +214,16 @@ class CurrentPaneUITests(unittest.IsolatedAsyncioTestCase):
             driver = Mock()
             with patch.object(app, "_driver", driver), patch.object(ui.SidebarApp, "is_headless", new_callable=PropertyMock, return_value=False):
                 app._paint_images()
-                self.assertEqual(driver.write.call_count, 4)
+                self.assertEqual(driver.write.call_count, 5)
                 app._paint_images()
                 app._image_origin = (0, 1, "@0")
                 app._paint_images()
                 app._image_origin = (0, 1, "@1")
                 app._paint_images()
-                self.assertEqual(driver.write.call_count, 4)
+                self.assertEqual(driver.write.call_count, 5)
                 driver.reset_mock()
                 app._release_images()
-                self.assertEqual(driver.write.call_count, 4)
+                self.assertEqual(driver.write.call_count, 5)
                 for call in driver.write.call_args_list:
                     self.assertIn("a=d,d=I,i=", call.args[0])
                 self.assertEqual(app._uploaded_images, set())
@@ -360,11 +360,22 @@ class RowRenderTests(unittest.TestCase):
         self.assertEqual(image.plain.count(PLACEHOLDER), 4)
         self.assertIn("CodeBuddy", image.plain)
 
-    def test_four_image_ids_stay_within_protocol_limit(self):
+    def test_pi_image_and_character_fallback(self):
+        rows = tui.visible_rows(build_tree([make_session(agent=AgentKind.PI,
+                                                  display="Pi", marker="P")]), set())
+        line = ui.session_line(rows[1], False, 30)
+        self.assertIn("Pi", line.plain)
+        self.assertIn(" P", line.plain)
+        self.assertNotIn(PLACEHOLDER, line.plain)
+        image = ui.session_line(rows[1], False, 30, image_icons=True, image_id=42)
+        self.assertEqual(image.plain.count(PLACEHOLDER), 4)
+        self.assertIn("Pi", image.plain)
+
+    def test_five_image_ids_stay_within_protocol_limit(self):
         with patch.object(ui.secrets, "randbelow", side_effect=lambda limit: limit - 1):
             app = ui.SidebarApp(tui.SidebarModel(lambda: build_tree([])))
         self.assertIn(AgentKind.CODEBUDDY, app._image_ids)
-        self.assertEqual(len(set(app._image_ids.values())), 4)
+        self.assertEqual(len(set(app._image_ids.values())), 5)
         self.assertEqual(max(app._image_ids.values()), 0xFFFFFF)
 
     def test_image_placeholder_is_four_cells_and_keeps_id_color_when_selected(self):

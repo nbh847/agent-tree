@@ -30,6 +30,8 @@ tmux 优先读取 pane 的 current path、current command、PID 等元数据，�
 
 CodeBuddy 身份签名支持 `codebuddy`、`cbc` 与 `codebuddy-code`，沿用可执行文件名、包装进程路径参数、启动命令名的证据顺序；作为已识别 Agent 排序，显示名为 `CodeBuddy`，使用用户指定的绿色像素机器人 PNG 图标，图片不可用时回退 `B` 字符标识。命令依据为 [官方文档](https://www.codebuddy.ai/docs/cli/README) ，并核对本机 `@tencent-ai/codebuddy-code` 2.161.0 的 `package.json` 中 `bin` 声明及两个命令的软链接。状态仍为未知。
 
+Pi 显示名为 `Pi`，支持 `pi` 可执行文件与启动命令，以及 Node／Bun 包装的 `@mariozechner/pi-coding-agent`、`@earendil-works/pi-coding-agent` 下 `dist/cli.js`／`dist/bundle/cli.js` 明确入口；普通 `cli.js` 和同名文本不匹配。入口依据为 [官方包声明](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/package.json) ，本机 1.0.3 的命令软链接指向后者的 `dist/bundle/cli.js`。作为已识别 Agent 排序，使用官网 PNG 缩略图，字符回退为 `P`，执行状态仍为未知。
+
 身份与执行状态分别判断：识别出 Codex 不代表知道它是否正在执行。身份优先用可信启动元数据和进程可执行文件／参数，屏幕特征作为补充；node、python、shell 包装不能单靠进程名定性。
 
 状态证据建议顺序为已验证的结构化事件、活跃界面或 OSC 信号、低可信启发式。事件必须关联目标会话并处理乱序、过期和退出；屏幕检测限制到当前可变区域，避开历史记录与 transcript viewer。无输出或进程存活只能作为观察事实。
