@@ -107,7 +107,7 @@ class DiscoveryIntegrationTests(unittest.TestCase):
         )
         host = self.tmux.server_key()
         self.assertEqual(len(discover(self.tmux, host)), 1)
-        self.tmux.run("new-session", "-d", "-s", "shell", "-n", "w", "-c", self.other)
+        self.tmux.run("new-session", "-d", "-s", "shell", "-n", "w", "-c", self.other, "/bin/sh")
         for _ in range(2):
             kept = discover(self.tmux, host, only_attached=True, keep_sessions=set())
             self.assertEqual([s.session_name for s in kept], ["agent"])

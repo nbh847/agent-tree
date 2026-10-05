@@ -185,14 +185,14 @@ class DiscoverTests(unittest.TestCase):
             self.assertEqual([s.backend_target for s in sessions], ["%0", "%1"])
             self.assertEqual(keep, set())
 
-    def test_detached_shell_unknown_and_stale_start_command_stay_hidden(self):
+    def test_detached_shell_and_stale_start_command_stay_hidden(self):
         panes = [make_pane("%0", pid=100),
                  make_pane("%1", start="codex", pid=200),
                  make_pane("%2", pid=300),
                  make_pane("%3", start="claude", pid=400)]
         procs = {100: make_proc(100, 1, "zsh"),
                  200: make_proc(200, 1, "zsh"),
-                 300: make_proc(300, 1, "sleep", "900")}
+                 300: make_proc(300, 1, "bash")}
         self.assertEqual(run_discover(panes, procs, only_attached=True), [])
         with mock.patch.object(processes, "snapshot", return_value={}):
             self.assertEqual(discovery.discover(FakeTmux(panes), "/sock", only_attached=True), [])
@@ -203,6 +203,21 @@ class DiscoverTests(unittest.TestCase):
         self.assertEqual(len(run_discover([pane], procs, only_attached=True)), 1)
         procs.pop(101)
         self.assertEqual(run_discover([pane], procs, only_attached=True), [])
+
+    def test_detached_services_survive_restart_and_disappear_when_stopped(self):
+        pane = make_pane("%0", cmd="bash", pid=100)
+        procs = {100: make_proc(100, 1, "zsh"),
+                 101: make_proc(101, 100, "bash"),
+                 102: make_proc(102, 101, "Python"),
+                 103: make_proc(103, 101, "node")}
+        for _ in range(2):
+            sessions = run_discover([pane], procs, only_attached=True, keep_sessions=set())
+            self.assertEqual([s.backend_target for s in sessions], ["%0"])
+            self.assertIs(sessions[0].agent, AgentKind.SHELL)
+        pane = make_pane("%0", cmd="zsh", pid=100)
+        # 后台服务也应保留，即使前台已回到 shell。
+        self.assertEqual(len(run_discover([pane], procs, only_attached=True)), 1)
+        self.assertEqual(run_discover([pane], {100: procs[100]}, only_attached=True), [])
 
     def test_keep_sessions_records_attached_and_retains_after_detach(self):
         # 第一次：a 附着、b 断开 → 存活 Agent 均可见，但只有 a 记入 keep_sessions。
