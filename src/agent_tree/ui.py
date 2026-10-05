@@ -20,7 +20,6 @@ from textual.binding import Binding
 from textual.containers import VerticalScroll
 from textual.widgets import Static
 
-from .model import AgentKind
 from .tui import (
     COLLAPSED_MARK,
     EXPANDED_MARK,
@@ -41,14 +40,6 @@ ACCENT = "#7ee787"
 SELECT_ACCENT = "#82aaff"
 ERROR = "#f85149"
 SEL_BG = "#21262d"
-
-#: 各 Agent 种类的名称配色（表示「种类」，不是执行状态）。
-KIND_COLOR = {
-    AgentKind.CLAUDE_CODE: "#d2a8ff",
-    AgentKind.CODEX: "#7ee787",
-    AgentKind.SHELL: "#79c0ff",
-    AgentKind.UNKNOWN: "#e3b341",
-}
 
 #: 树形连接线：非末项与末项。
 CONNECTOR_MID = "├─ "
@@ -136,12 +127,12 @@ def group_line(row: Row, collapsed: set[str], selected: bool, width: int, *, can
 
 
 def session_line(row: Row, selected: bool, width: int) -> Text:
-    """会话行：连接线 + 按种类着色的名称。"""
+    """会话行：连接线 + 普通正文色名称。"""
     session = row.session
     assert session is not None
     line = Text()
     line.append("  " + (CONNECTOR_LAST if row.last else CONNECTOR_MID), style=FAINT)
-    line.append(session.display_name, style=KIND_COLOR.get(session.agent, TEXT))
+    line.append(session.display_name, style=TEXT)
     _pad(line, "", width)
     return _highlight(line, selected, width)
 

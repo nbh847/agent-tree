@@ -212,16 +212,16 @@ class RowRenderTests(unittest.TestCase):
         self.assertTrue(first.plain.startswith("  " + ui.CONNECTOR_MID), repr(first.plain))
         self.assertTrue(last.plain.startswith("  " + ui.CONNECTOR_LAST), repr(last.plain))
 
-    def test_session_name_is_colored_by_kind(self):
+    def test_session_name_uses_normal_text_color(self):
         rows = sample_rows()
         codex = ui.session_line(rows[1], False, 40)
         shell = ui.session_line(rows[2], False, 40)
         self.assertIn(
-            ui.KIND_COLOR[AgentKind.CODEX],
+            ui.TEXT,
             [str(span.style) for span in codex.spans if codex.plain[span.start : span.end] == "Codex"],
         )
         self.assertIn(
-            ui.KIND_COLOR[AgentKind.SHELL],
+            ui.TEXT,
             [str(span.style) for span in shell.spans if shell.plain[span.start : span.end] == "Shell"],
         )
 
