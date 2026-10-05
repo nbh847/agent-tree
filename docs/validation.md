@@ -2,6 +2,114 @@
 
 本文件保存 agent-tree 的阶段验证过程、环境版本、结果与未覆盖范围。只记录实际执行过的验证，未运行的事项标为未验证。
 
+## 2026-10-05 20:00：缓存 PNG 与 tmux 图片位置标记
+
+用户要求必须保留图片，拒绝改成字体图标。重新核对 [iTerm2 图片文档](https://iterm2.com/documentation-images.html) 确认支持 Kitty Graphics；[协议中的 Unicode 图片位置标记](https://sw.kovidgoyal.net/kitty/graphics-protocol/#unicode-placeholders) 可以让普通字符画面保存实际 PNG 的显示位置。此前「焦点切换无法避免补画」的结论仅适用于旧 OSC 1337 叠图方式，不适用于这条缓存路径。
+
+实现：三种 32 × 48 PNG 原样上传，创建四列／三行的虚拟画布，每种资源每个实例只上传一次。实例随机分配三个 24 位 ID，位置标记的前景 RGB 编码 ID，显式携带高字节为零的第三枚组合标记，避免 iTerm2 对省略高字节的历史兼容问题。tmux 重绘自己的字符画面即可恢复终端缓存图片；没有向宿主直接写绝对图片坐标。删除旧清图与补画逻辑，滚动、裁剪、折叠交给普通文字处理；正常与异常退出只回收本实例缓存。未增加运行依赖、替换 tmux 或修改全局选项。
+
+原型：独立 socket `agent-tree-persistent-20261005`、iTerm2 窗口 580。原型上传三个 PNG 后进入 sleep，不再输出图片；切换两侧 pane 焦点后，`prototype-focus.png` 和 `prototype-settled.png` 仍显示三种真实图片，tmux capture 保存 U+10EEEE 与行列组合标记。`prototype-return.png` 为黑帧，不用作验收证据。
+
+正式验证：29 项图标／界面回归通过；独立 socket 完整回归 198 项全部通过，无跳过，日志为 `.tmp/icon-persistent/full.log`。真实 pty 首帧采集每个 PNG 恰好一次及三个虚拟画布，之后三轮两侧鼠标点击、60 次无按键移动、选中变化和同尺寸跨窗口迁移都没有图片上传或画布重建；同时断言 tmux 宿主重绘包含图片位置标记，每次点击的目标 pane 确实获得焦点。q 输出只删除本实例的三个图片 ID，用户 pane 仍存活。首轮选项断言在子进程设置透传前执行，出现启动竞态；改为采集首帧后再核对原有隔离断言，不放宽图片、焦点或资源回收断言。
+
+真实外观：`formal-agents.png` 确认 Codex／Claude 的 PNG 与名称右侧居中，`formal-shell-focus.png` 显示 Shell 焦点下的图片；`final-shell-focus.png` 和 `final-sidebar-focus.png` 同一可见列表同时包含三种 PNG，两侧焦点下图片均保留。`formal-folded.png` 显示正确鼠标折叠后无图片残影；展开与滚动后的图片由位置标记自然恢复。截图与探针保存在 `.tmp/icon-persistent/`。部分立即抓取的画面为黑帧，不将其认定为图片消失，也不作为外观通过证据。
+
+清理：预览 socket 已关闭，iTerm2 仅剩用户原窗口 72；隔离回归的 socket／pty 由夹具回收。未重启用户侧栏或更改用户窗口。当前真实验收限于本机 iTerm2 3.7.3、tmux 3.7c 与保留 RGB ID 的终端链路；旧版宿主、不同真彩色配置、zoom 与更多多 client 外观仍待验收，用户于 2026-10-05 20:10 明确确认问题修复，当前本机使用验收通过。
+
+## 2026-10-05 19:33：两侧 pane 焦点切换
+
+用户报告在 Shell 与侧栏之间点击会刷新全部图片。Textual 的 `app_focus` 默认是触发重绘的 Reactive；新增焦点回归在原实现出现覆盖图片的 LayoutUpdate。将其改为 `repaint=False`、保留原有焦点 watcher 后，界面层不再整屏重绘。
+
+仅禁用界面层重绘不足以解决问题：第一版 pty 用例只断言没有图片发送，因此通过；真实 iTerm2 窗口 570 的 `shell-focus.png` 和 `sidebar-focus.png` 却显示图片消失。随后采集宿主输出，确认切换 pane 包含整窗文字与 ECH 擦除。核对 [tmux 3.7 的 window_set_active_pane 源码](https://github.com/tmux/tmux/blob/3.7/window.c#L508-L536) ，它调用 `server_redraw_window`；透传 PNG 不在 tmux 的字符画面里，宿主重绘会覆盖图片。不能以「不再发送图片」作为图片保留的验收条件。
+
+最终实现保留焦点状态处理，取消 Textual 额外的整屏重绘；收到 AppFocus／AppBlur 后只恢复可见图片，不清旧图、不再输出文字帧。原有内容更新、选中变化、滚动、折叠、尺寸与窗口迁移照常重绘。该方案消除应用层的额外清理与重绘，但 tmux 自身重绘仍存在，不能认定完全不刷新或零闪烁；完全消除需要改变图片集成方式，本轮未改 tmux、全局配置或项目架构。
+
+真实 pty 用例开启独立 server 的焦点事件和独立窗口的鼠标选项，实际来回点击三轮，并检查每次目标 pane 确实获得焦点；每次仅一轮四个可见图片包，图片后没有覆盖文字。第一次点击用例没有开启测试窗口鼠标，未真正切换 pane，断言失败后已补齐夹具。headless 验证焦点状态随事件变化、没有覆盖图片区的文本帧、每次一张图片输出且不清旧图、恢复后键盘导航可用。模拟真实 driver 限定在同步图片输出函数内，避免异步 headless 循环误读取真实终端尺寸。
+
+完整验证：196 项独立 socket 完整回归全部通过，无跳过，日志为 `.tmp/icon-focus/full-final.log`；`git diff --check` 通过。
+
+真实外观：窗口 570 最终截图 `shell-focus-final.png`、`sidebar-focus-final.png` 确认两侧焦点下图片均保留，仍保持右侧居中。用户默认 server 的 `focus-events on` 仅只读核对；本实现不修改该选项，未开启时的焦点恢复不在此次验收范围。预览 socket `agent-tree-icons-20261005` 已退出，iTerm2 仅剩原窗口 72。截图、修复前失败日志及最终测试日志保存在 `.tmp/icon-focus/`。
+
+## 2026-10-05 19:17：鼠标移动图标闪烁
+
+复现：Textual headless 测试让鼠标经过目录、树线、名称、图片占位及留白，记录 `_display` 的覆盖区域；修复前出现多次覆盖图片的 `ChopsUpdate`，新增回归失败。本机 Textual 的 `Widget.watch_hover_style` 默认把文字样式的 `link_id` 写入触发重绘的 `highlight_link_id`，即使没有链接也会刷新。关闭三个 Static 的 `auto_links` 后，同样的悬停序列不再覆盖图片区域；没有拦截鼠标事件或跳过正常内容重绘。
+
+验证：22 项界面回归通过；独立 socket 完整回归 195 项全部通过，无跳过。真实 pty 在稳定侧栏焦点下发送 60 次 SGR 无按键鼠标移动，跨过列表和底栏后图片协议发送次数为零；原有点击、滚动、折叠、迁移、三类资源和无损退出用例继续通过。日志保存在 `.tmp/icon-hover/before.log`、`ui.log` 和 `full.log`；测试 socket 与 pty 由夹具清理，未操作用户会话。本轮未另行获取 iTerm2 外观截图。
+
+## 2026-10-05 19:05：名称右侧与垂直居中
+
+按用户截图反馈，将左侧图标移到会话名称右侧，名称从树线后直接开始。图标跟随截断后名称的位置，按 Rich 显示列宽计算，保留一列间隔；空间不足 13 列时优先名称。
+
+两行高图案与单行文字无法用原来的两行区域精确居中；改为三行条目，名称置于中间行。PNG 画布由 32 × 32 改为 32 × 48，上下各加入八像素背景留白，图案不变；输出四列宽、三行高画布，内部图案占两行，名称与图案中心对齐。背景统一为界面近黑色，避免原透明边缘继承宿主紫色背景。清理同步覆盖三行，继续在文本帧之前清旧图，所有可点击行指向同一会话，滚动保证完整图标可见。
+
+验证：194 项完整回归全部通过，无跳过；补充三行滚动边界后 21 项界面测试通过。坐标测试确认名称行位于图标画布的正中间，右侧位置使用显示列宽；已有字符回退、窄栏、点击导航、无关点击、折叠、迁移与无损退出继续覆盖。独立 iTerm2 窗口 557 的真实截图 `.tmp/icon-right-align/centered.png` 确认 Shell 图标位于名称右侧且垂直居中。Codex／Claude 同样通过真实截图核对，证据为 `.tmp/icon-right-align/agents-centered.png`。预览窗口 557 和独立 socket 已清理，iTerm2 仅剩原窗口 72，用户三个 client 绑定不变。素材来源沿用资源说明，没有新增运行依赖。
+
+## 2026-10-05 18:55：两倍宽高与点击残影修复
+
+用户真实截图确认初版三类图标显示，但反馈图标过小、点击任意位置会补画并产生残影。代码核对确认 `_display` 曾对每个非空 Textual 帧无条件作废全部图片缓存；真实 pty 又确认点击过程中 Textual 的文本选择和焦点切换会引发重绘。不能仅凭上一轮字节流断言认定外观无残影。
+
+- 显示范围从两列宽／一行高改为四列宽／两行高，宽度和高度均加倍；复用子会话前一行留白，不增加列表总行数，图片上半部点击同样可导航。素材仍为 32 × 32 PNG，运行时仅改变显示范围，编码量不增大；不足 12 列时优先名称。
+- 帧的 region／spans 未覆盖图标且位置未变化时，不发送图片。需补画时，通过同一 driver 队列先用背景色空格覆盖旧图完整两行，再写 Textual 文本帧，最后发送新图片。跨窗口或越出当前自建 pane 的旧位置不清理，避免误写用户 pane。
+- 禁用导航列表的 Textual 文本选择及滚动控件点击聚焦；保留真正宿主焦点变化所需的重绘。测试最初混入 `select-pane` 引起的合法焦点重绘，后改为先等待焦点稳定，再检查普通点击；没有禁止必要补画。
+- 真实首帧曾被启动命令返回后的 shell 提示符重绘清掉，因此启动后延迟一秒只补画一次；之后仍按需发送。空闲测试在这一次启动帧结束后验证三秒零图片输出。
+- 最终完整回归 194 项全部通过，无跳过；新增四列／两行协议、完整两行清理、清理与文本顺序、无关帧不补画、稳定焦点下点击底栏不重传的用例。已有点击导航、刷新、折叠、窄栏、迁移、进程识别和无损退出继续通过。
+- 自建 iTerm2 窗口 508／独立 socket `agent-tree-icons-20261005` 的真实截图确认三种图标宽高放大；真实鼠标协议点击目录行后列表折叠，原图区域无残留；再次点击展开后图标恢复，长列表滚动仍对齐。证据位于 `.tmp/icon-ghost-fix/`：`large-settled.png`、`folded-click.png`、`restored-click.png`、`scrolled.png`。`folded.png` 不是有效折叠证据：键盘 h 在子会话行不折叠，之后已改用真实目录行点击。
+
+最终版本启动后无需点击即可显示三类放大图标，证据为 `.tmp/icon-ghost-fix/final-startup.png`。自建窗口 508 与独立 socket 已回收，iTerm2 只剩原窗口 72；用户三个 client 的 TTY／session 绑定及全局 `allow-passthrough off` 保持不变。文档链接与 `git diff --check` 检查通过。
+
+未覆盖：zoom 恢复、多个不同尺寸 client 同时注视的图片外观与长时间运行；不据有限截图声称全部残影场景已消除。协议尺寸语义核对 [iTerm2 官方图片协议](https://iterm2.com/documentation-images.html) 。
+
+## 2026-10-05 18:36：缩略图与正式侧栏接入
+
+沿用 iTerm2 3.7.3／tmux 3.7c；正式运行仍仅依赖 Textual，没有安装系统级工具、替换 tmux 或新增正式图片依赖。
+
+- **小图原型可按需显示**：样例编码从约 74 KB 降到约 5 KB。相同独立 pty 探针中，滚动捕获从 1,103,925 字节降到 103,758 字节；这是同一探针的输出量对照，不是吞吐或延迟基准。末张图片之后未再捕获到擦除图片位置的文本重绘，空闲两秒输出为零。真实截图 `thumbnail-scroll.png`、`thumbnail-restored.png` 确认滚动第 11～16 行图标及折叠恢复后的对齐；文件位于 `.tmp/sidebar-image-probe/`。大图透传后的延迟重绘与 tmux 缓冲行为相符，但未取得 tmux 内部调试日志，不能认定已追踪到具体分支。
+- **正式资源与界面**：`assets/` 中三张 32 × 32 PNG，单张 Base64 为 1,648～3,088 字节。Codex 按用户参考使用 OpenAI 结形图形，Claude 使用官网图标，Shell 为项目绘制的终端窗口图案；资源来源随包保存。子会话行预留两列宽、一行高，只发送可见区域内图标；未知身份与不可用图片条件保持字符和名称。
+- **正式宿主集成**：独立 socket 确认 pane 级 `allow-passthrough` 可用，全局值仍为 `off`；正式代码仅设置本实例自建 pane，迁移保留该选项。读取 pane 偏移、顶部 status 和 window ID；不可见、zoom 或 client 裁剪窗口时停止透传。Textual 帧后通过同一 driver 队列叠图，不透传光标恢复。
+- **空闲问题定位与修复**：首次真实 pty 回归发现 `Static.update` 在文字内容不变时仍导致周期重绘及图片重传；正式界面增加文字内容比较，未变化不提交新帧。单元测试核对无重复更新，真实 pty 的三秒空闲采集确认没有图片输出。
+- **采集边界**：固定二／三秒采集曾出现迁移或帧尾断言不稳定。保留 pty 输出诊断后，夹具改为等待完整 OSC 包并且输出安静 0.3 秒（上限 20 秒），没有放宽三类资源、末图后无覆盖文本、空闲无图或迁移断言。诊断记录中八张图片共 23,008 字节，末图之后仅 139 字节终端控制序列；原始证据在 `.tmp/sidebar-icons/formal-frame.bin`。
+- **最终验证**：`AGENT_TREE_RUN_TMUX_TESTS=1 PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -t tests` 共 192 项全部通过，无跳过。新增真实 pty 用例验证三种图片数据、完整包、末图之后没有覆盖图标行的名称重绘、空闲、同尺寸切窗补画、用户 pane 未设置透传以及 q 后用户 pane 保留；headless 验证滚动、折叠、窄栏、未知身份和偏移。`git diff --check` 与受影响文档本地链接检查通过。
+
+限制：正式版独立 iTerm2 窗口已启动并通过文本快照确认三类条目，但 `screencapture` 对窗口和显示屏均无法生成截图，未确认原因，因此未认定正式版的真实外观、残影或缩放恢复通过。原型截图不能替代正式侧栏外观验收。当前没有重新启动用户既有侧栏；需 q 后重启加载源码。安装 wheel 内资源未独立构建验证，已声明 package-data 并验证源码运行资源读取。
+
+清理：自建预览窗口 470 与 socket `agent-tree-icons-20261005` 已退出；原型 socket 无 server，iTerm2 只剩用户原窗口 72。用户 client `/dev/ttys000 → 0`、`/dev/ttys002 → 3`、`/dev/ttys004 → 2` 保持一致，默认 server 全局 `allow-passthrough off` 未改变。完整回归的独立 socket／pty 由夹具清理。
+
+## 2026-10-05 18:03：图片显示失败的对照定位
+
+沿用 17:45 的环境与原始 PNG 样例，新增原始终端协议对照、独立 pty 外层输出捕获，以及 Textual 重绘对照；没有改动正式源码、依赖或用户配置。
+
+### 已确认结果
+
+- **全屏模式不是阻塞项**：不使用 Textual 的 alternate screen 对照中，裸 OSC 1337 图片透传正常显示；tmux 原生光标定位后仅透传图片也正常显示。截图为 `.tmp/sidebar-image-probe/phase-1.png`、`phase-2.png`。
+- **透传内的光标恢复是一个明确触发条件**：把终端原生 `ESC 7`、CUP、图片与 `ESC 8` 一起透传时，截图没有图片；让 tmux 处理光标保存／定位／恢复、只透传图片时显示成功。Textual 原型移除透传内的 `ESC 8` 后，初始列表六个完整可见图标成功显示，截图为 `.tmp/sidebar-image-probe/no-restore.png`。这些对照确定了可规避的触发条件，尚未追踪到 iTerm2 内部为什么在光标恢复后丢失图片。
+- **定位指令需要考虑外层终端状态**：tmux 3.7c 的 `tty_cmd_rawstring` 直接转发数据并使 tty 状态缓存失效，不自动把图片定位到 pane 光标。本轮在完整窗口的自建 pane 内验证，正式侧栏需要额外处理 pane 偏移与跨 window 迁移。
+- **滚动后需要重新补画**：仅根据列表坐标和选中项缓存图片绘制结果，滚动后的截图再次没有图片；跟随 Textual `_display` 使用同一 driver 输出队列也未完全解决。每 0.3 秒持续补画的诊断对照中，第 11～16 行图片重新显示且对齐，截图为 `.tmp/sidebar-image-probe/continuous-scroll.png`。因此只能认定原型显示路径可行，不能认定按需重绘已经稳定。
+- **折叠清理通过有限验证**：此前能显示初始图标的原型折叠列表后，截图中没有残留图标，证据为 `.tmp/sidebar-image-probe/fixed-fold.png`；连续补画版本没有独立完成折叠回归。
+
+### 限制与后续
+
+持续补画会反复传输完整样例 PNG；本轮截图命令曾等待超过 10 秒，不能将该对照方案作为可交付的性能实现。已停止该诊断，并取消 launcher 默认开启持续补画。下一步应解决图片对 Textual／tmux 后续重绘的失效通知与补画时序，再以小尺寸正式图标验证性能；无需仅因为初版失败就判定必须替换 tmux。部分可见图片裁切、三类正式素材、真实身份动态切换、窄栏、迁移与无损退出的图片验收仍未完成。
+
+清理：三个自建 socket `agent-tree-image-probe-20261005`、`agent-tree-image-isolate-20261005`、`agent-tree-image-wire-20261005` 均无 server；自建窗口 431、439、443、449、450、454 均已消失，iTerm2 只剩原窗口 72。原有三个 tmux client 的 TTY、终端类型与 session 绑定一致，原 server 的全局 `allow-passthrough` 仍为 `off`。
+
+源码依据：[tmux 3.7c 原始透传实现](https://github.com/tmux/tmux/blob/3.7c/tty.c#L2037) 。本地 Textual driver 的 `write()` 使用 writer thread 队列；原型将图片放入该队列，但目前没有因此获得完整滚动验收。
+
+## 2026-10-05 17:45：真实图片图标可行性原型
+
+环境：iTerm2 3.7.3、tmux 3.7c、项目现有 Textual；图片库 textual-image 0.14.0 与 Pillow 12.3.0 仅装入 `.tmp/sidebar-image-probe/deps`，没有加入正式依赖。使用用户上传的完整截图作为 PNG 样例，没有制作正式 Codex／Claude／Shell 素材。
+
+使用独立 socket `agent-tree-image-probe-20261005`，仅对自建测试 window 开启 `allow-passthrough`。通过 iTerm2 原生脚本接口指定测试命令，避开默认 profile 的 tmux 启动命令；没有修改 profile 或用户 tmux 配置。
+
+- **普通终端画面通过**：OSC 1337 `File=inline=1;width=4;height=2` 经 tmux DCS 透传，真实窗口截图确认 PNG 显示。截图保留在 `.tmp/sidebar-image-probe/baseline.png`。
+- **本机原生 Sixel 路径不可用**：独立 server 的 `display-message -p '#{sixel_support}'` 返回 `0`，终端响应探针也未报告 Sixel。给独立 server 声明终端 sixel 特性不能替代 tmux 编译支持。
+- **Textual 行内原型未通过**：同步渲染控制序列与文本帧之后定时叠加两种原型均执行过；截图中会话名称可见，但没有稳定保留图片。样例采用 30 行列表、4 列 × 2 行图片区；未确定图片消失的完整根因，不能断言正式侧栏支持图片。证据为 `.tmp/sidebar-image-probe/inline-rows.png` 与 `.tmp/sidebar-image-probe/overlay.png`。
+- **图片库启动边界**：能力探针曾因逐字节 UTF-8 解码抛出 `UnicodeDecodeError`；原型改为读取完整字节串，未修改上游库或正式源码。
+- **清理通过**：原型发送 `q` 后独立 socket 无 server；iTerm2 窗口列表中自建窗口 ID 404、418、420、425、426、427 均已消失。用户原有三个 client 的 TTY、终端类型与 session 绑定保持一致。
+
+结论：仅证明普通画面的图片透传可行，不接入正式侧栏。下一步建议使用开启 Sixel 编译支持的隔离 tmux 构建验证 Textual 原型；未修改或安装系统 tmux。滚动残影、折叠清理、窄栏裁切、跨 window 迁移及退出恢复均未完成图片验收。
+
+协议依据：[iTerm2 图片协议](https://iterm2.com/documentation-images.html) 、[iTerm2 原生脚本接口](https://iterm2.com/documentation-scripting.html) 、[textual-image 的 tmux 支持与限制](https://github.com/lnqs/textual-image#tmux) 。上游支持声明不替代本机验收。
+
 ## 2026-10-05 08:32：detached Agent 发现修复
 
 完整回归 172 项全部通过（含隔离 tmux 与真实 textual／pty）；离线执行 172 项，9 项集成跳过。

@@ -10,6 +10,8 @@
 from __future__ import annotations
 
 import os
+import secrets
+import sys
 from typing import Callable
 
 from rich.cells import cell_len
@@ -18,8 +20,11 @@ from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import VerticalScroll
+from textual.reactive import Reactive
 from textual.widgets import Static
 
+from .icons import ICON_COLUMN, ICON_HEIGHT, ICON_WIDTH, delete_sequence, image_sequence, placeholder_row
+from .model import AgentKind
 from .tui import (
     COLLAPSED_MARK,
     EXPANDED_MARK,
@@ -126,15 +131,46 @@ def group_line(row: Row, collapsed: set[str], selected: bool, width: int, *, can
     return _highlight(line, selected, width)
 
 
-def session_line(row: Row, selected: bool, width: int) -> Text:
-    """会话行：连接线 + 普通正文色名称。"""
+def session_icon_column(row: Row, width: int) -> int | None:
+    """图标紧随可见名称，窄栏为名称保留至少三列。"""
+    if width < ICON_COLUMN + ICON_WIDTH + 4:
+        return None
+    name = Text(row.session.display_name)
+    name.truncate(width - ICON_COLUMN - ICON_WIDTH - 1, overflow="ellipsis")
+    return ICON_COLUMN + cell_len(name.plain) + 1
+
+
+def session_line(row: Row, selected: bool, width: int, *, image_icons: bool = False,
+                 image_id: int | None = None) -> Text:
+    """会话行：连接线 + 名称 + 右侧图标／字符标识。"""
     session = row.session
     assert session is not None
     line = Text()
     line.append("  " + (CONNECTOR_LAST if row.last else CONNECTOR_MID), style=FAINT)
-    line.append(session.display_name, style=TEXT)
+    column = session_icon_column(row, width)
+    name = Text(session.display_name, style=TEXT)
+    if column is not None:
+        name.truncate(column - ICON_COLUMN - 1, overflow="ellipsis")
+    line.append_text(name)
+    if column is not None:
+        marker = (" " * ICON_WIDTH if image_icons and session.agent != AgentKind.UNKNOWN
+                  else session.marker.ljust(ICON_WIDTH))
+        line.append(" ", style=DIM)
+        if image_id is not None:
+            line.append(placeholder_row(image_id, 1), style=f"#{image_id:06x} on {BG}")
+        else:
+            line.append(marker, style=DIM)
     _pad(line, "", width)
     return _highlight(line, selected, width)
+
+
+def session_spacer(row: Row, width: int, image_id: int | None, canvas_row: int) -> Text:
+    line = Text("   " if canvas_row == 2 and row.last else "  │", style=FAINT)
+    column = session_icon_column(row, width)
+    if image_id is not None and column is not None:
+        line.append(" " * (column - 3))
+        line.append(placeholder_row(image_id, canvas_row), style=f"#{image_id:06x} on {BG}")
+    return line
 
 
 def _highlight(line: Text, selected: bool, width: int) -> Text:
@@ -163,6 +199,9 @@ class SidebarApp(App):
     """textual 侧栏：标题栏 + 树内容区 + 底部操作条。"""
 
     CSS = CSS
+    ALLOW_SELECT = False  # 这是导航列表，普通点击不启动 Textual 文本选区。
+    # 两侧 pane 切换不改变侧栏外观；保留框架焦点处理，取消整屏自动重绘。
+    app_focus = Reactive(True, compute=False, repaint=False)
     BINDINGS = [
         Binding("q", "quit", "退出", show=False),
         Binding("up,k", "cursor_up", "上移", show=False),
@@ -175,20 +214,34 @@ class SidebarApp(App):
         Binding("right,escape", "handoff", "进入目标", show=False),
     ]
 
-    def __init__(self, model: SidebarModel, on_ready: Callable[[], None] | None = None) -> None:
+    def __init__(self, model: SidebarModel, on_ready: Callable[[], None] | None = None,
+                 *, image_origin: Callable[[], tuple[int, int, str] | None] | None = None) -> None:
         super().__init__()
         self.model = model
         # 侧栏旁的用户 pane 全部关闭且无可补位会话时，由模型回调退出。
-        model.on_exit = self.exit
+        model.on_exit = self.action_quit
         self.on_ready = on_ready
         self._line_rows: list[int | None] = []
+        self.image_origin = image_origin
+        self._image_origin: tuple[int, int, str] | None = None
+        self._last_text: dict[str, Text] = {}
+        first_id = secrets.randbelow(0xFFFFFD) + 1
+        self._image_ids = {kind: first_id + index for index, kind in enumerate(
+            (AgentKind.CODEX, AgentKind.CLAUDE_CODE, AgentKind.SHELL))}
+        self._uploaded_images: set[AgentKind] = set()
 
     # ---- 布局 ----
 
     def compose(self) -> ComposeResult:
-        yield Static(id="title")
-        yield VerticalScroll(Static(id="body"), id="scroll")
-        yield Static(id="foot")
+        # 没有可点击链接；默认链接悬停会随文字样式变化重绘整个 Static。
+        title, body, foot = (Static(id=name) for name in ("title", "body", "foot"))
+        for widget in (title, body, foot):
+            widget.auto_links = False
+        yield title
+        scroll = VerticalScroll(body, id="scroll")
+        scroll.can_focus = False  # 按键由 App 绑定处理，无需点击时切换控件焦点。
+        yield scroll
+        yield foot
 
     def on_mount(self) -> None:
         # 先画出占位帧，再执行较慢的宿主检查与首次扫描。
@@ -196,6 +249,8 @@ class SidebarApp(App):
         if self.on_ready is not None:
             self.on_ready()
         self.model.reload()
+        if self.image_origin is not None:
+            self._image_origin = self.image_origin()
         self._paint()
         self.set_interval(self.model.refresh_seconds, self._tick)
         self.set_interval(0.25, self._sync_host)
@@ -212,8 +267,40 @@ class SidebarApp(App):
     def _sync_host(self) -> None:
         previous = (self.model.selected, set(self.model.collapsed), self.model.message)
         self.model.sync_current()
-        if previous != (self.model.selected, self.model.collapsed, self.model.message):
+        old_origin = self._image_origin
+        if self.image_origin is not None:
+            self._image_origin = self.image_origin()
+        if previous != (self.model.selected, self.model.collapsed, self.model.message) or old_origin != self._image_origin:
             self._paint()
+            return  # 图片缓存随文本帧准备，位置变化由标记重绘。
+        # PNG 每个实例只上传一次，宿主重绘保留图片位置标记。
+        self._paint_images()
+
+    def _display(self, screen, renderable) -> None:
+        """先准备 PNG 缓存，再由普通文本帧绘制位置标记。"""
+        self._paint_images()
+        super()._display(screen, renderable)
+
+    def _paint_images(self) -> None:
+        if self._image_origin is None or self._driver is None or self.is_headless:
+            return
+        pending = self._image_ids.keys() - self._uploaded_images
+        for kind in pending:
+            self._driver.write(image_sequence(kind, self._image_ids[kind]))
+            self._uploaded_images.add(kind)
+        if pending:
+            self._driver.flush()
+
+    def _release_images(self) -> None:
+        if self._driver is not None and not self.is_headless:
+            for kind in self._uploaded_images:
+                self._driver.write(delete_sequence(self._image_ids[kind]))
+            self._driver.flush()
+        self._uploaded_images.clear()
+
+    def action_quit(self) -> None:
+        self._release_images()
+        self.exit()
 
     def _width(self) -> int:
         body = self.query_one("#body", Static)
@@ -225,20 +312,25 @@ class SidebarApp(App):
         self._paint_body()
         self._paint_foot()
 
+    def _update_text(self, widget_id: str, text: Text) -> None:
+        # Static.update 即使内容相同也会重绘；快照未变化时不提交新帧。
+        if self._last_text.get(widget_id) != text:
+            self._last_text[widget_id] = text
+            self.query_one(widget_id, Static).update(text)
+
     def _paint_title(self) -> None:
         total = sum(len(group.sessions) for group in self.model.tree)
         text = Text()
         text.append("会话", style=f"bold {DIM}")
         _pad(text, str(total), max(1, self.size.width - 2))
-        self.query_one("#title", Static).update(text)
+        self._update_text("#title", text)
 
     def _paint_foot(self) -> None:
-        foot = self.query_one("#foot", Static)
         if self.model.message:
-            foot.update(Text(self.model.message, style=ERROR))
+            self._update_text("#foot", Text(self.model.message, style=ERROR))
             return
         hint = foot_text(self.model.can_navigate, max(1, self._width() - 2))
-        foot.update(Text(hint, style=DIM))
+        self._update_text("#foot", Text(hint, style=DIM))
 
     def _paint_body(self) -> None:
         width = self._width()
@@ -264,18 +356,28 @@ class SidebarApp(App):
                         can_create=self.model.on_new_session is not None,
                     )
                 else:
-                    body.append("  │\n", style=FAINT)
-                    self._line_rows.append(None)
-                    line = session_line(row, index == self.model.selected, width)
+                    image_id = (self._image_ids.get(row.session.agent)
+                                if self._image_origin is not None and session_icon_column(row, width) is not None
+                                else None)
+                    body.append_text(session_spacer(row, width, image_id, 0))
+                    body.append("\n")
+                    self._line_rows.append(index if self._image_origin is not None else None)
+                    line = session_line(row, index == self.model.selected, width,
+                                        image_icons=self._image_origin is not None, image_id=image_id)
                 body.append_text(line)
                 body.append("\n")
                 self._line_rows.append(index)
+                if row.kind == "session":
+                    body.append_text(session_spacer(row, width, image_id, 2))
+                    body.append("\n")
+                    self._line_rows.append(index if self._image_origin is not None else None)
 
-        self.query_one("#body", Static).update(body)
+        self._update_text("#body", body)
         if self.model.selected in self._line_rows:
             line = self._line_rows.index(self.model.selected)
             scroll = self.query_one("#scroll", VerticalScroll)
-            if line < scroll.scroll_y or line >= scroll.scroll_y + scroll.size.height:
+            selected_height = ICON_HEIGHT if self._image_origin is not None else 1
+            if line < scroll.scroll_y or line + selected_height > scroll.scroll_y + scroll.size.height:
                 scroll.scroll_to(y=max(0, line - scroll.size.height // 2), animate=False)
 
     # ---- 交互 ----
@@ -348,6 +450,15 @@ class SidebarApp(App):
                     self._select(index)
 
 
-def run_sidebar(model: SidebarModel, on_ready: Callable[[], None] | None = None) -> None:
+def run_sidebar(model: SidebarModel, on_ready: Callable[[], None] | None = None,
+                *, image_origin: Callable[[], tuple[int, int, str] | None] | None = None) -> None:
     """在调用者终端中运行侧栏，直到用户退出。"""
-    SidebarApp(model, on_ready).run()
+    app = SidebarApp(model, on_ready, image_origin=image_origin)
+    try:
+        app.run()
+    finally:
+        # 异常退出时 driver 已停止；仍在本实例 pane 内回收剩余缓存。
+        for kind in app._uploaded_images:
+            sys.stdout.write(delete_sequence(app._image_ids[kind]))
+        if app._uploaded_images:
+            sys.stdout.flush()

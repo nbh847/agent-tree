@@ -9,6 +9,7 @@ window，再切换发起 client，最后把焦点交回侧栏。
 
 from __future__ import annotations
 
+import os
 import sys
 import uuid
 from dataclasses import dataclass
@@ -208,6 +209,36 @@ class SidebarManager:
 
     # ---- 生命周期 ----
 
+    def enable_images(self) -> bool:
+        """只在本实例自建 pane 上启用透传；不支持时保留文字界面。"""
+        if self.pane_id is None or not self.is_mine(self.pane_id):
+            return False
+        return self.tmux.run("set-option", "-p", "-t", self.pane_id,
+                             "allow-passthrough", "on", check=False).returncode == 0
+
+    def image_origin(self) -> tuple[int, int, str] | None:
+        """图片的宿主坐标原点；不可见、缩放或 client 裁剪时停止透传。"""
+        if self.pane_id is None or self.client_name is None:
+            return None
+        tokens = ("client_session", "session_name", "window_active", "window_zoomed_flag",
+                  "pane_left", "pane_top", "client_width", "client_height",
+                  "window_width", "window_height", "status-position", "status", "window_id")
+        result = self.tmux.run("display-message", "-p", "-c", self.client_name,
+                               "-t", self.pane_id,
+                               SEP.join(f"#{{{token}}}" for token in tokens), check=False)
+        fields = result.stdout.strip().split(SEP)
+        if result.returncode or len(fields) != len(tokens):
+            return None
+        client_session, session, active, zoomed, *rest = fields
+        if client_session != session or active != "1" or zoomed != "0":
+            return None
+        left, top, client_width, client_height, width, height = map(_to_int, rest[:6])
+        if min(left, top, width, height) < 0 or client_width < width or client_height < height:
+            return None
+        status = 1 if rest[7] == "on" else max(0, _to_int(rest[7], 0))
+        # 返回窗口 ID，让界面识别同尺寸迁移；PNG 缓存由位置标记复用。
+        return left, top + (status if rest[6] == "top" else 0), rest[8]
+
     def launch(self, target_window: str) -> str:
         """在目标 window 左侧创建自建侧栏 pane 并返回其 ``pane_id``。"""
         width = self.tmux.run(
@@ -235,6 +266,10 @@ class SidebarManager:
         if self.tmux.socket:
             command += ["--socket", self.tmux.socket]
 
+        # 显式传递启动终端类型，避免沿用 tmux server 的旧终端环境。
+        protocol = "iterm" if (os.environ.get("TERM_PROGRAM") == "iTerm.app"
+                               or os.environ.get("ITERM_SESSION_ID")) else ""
+
         try:
             pane_id = self.tmux.run(
                 "split-window",
@@ -249,6 +284,8 @@ class SidebarManager:
                 "#{pane_id}",
                 "-e",
                 f"PYTHONPATH={source_root()}",
+                "-e",
+                f"AGENT_TREE_IMAGE_PROTOCOL={protocol}",
                 *command,
             ).stdout.strip()
         except TmuxCommandError as exc:

@@ -11,6 +11,8 @@ import contextlib
 import fcntl
 import os
 import pty
+import re
+import select
 import shutil
 import signal
 import struct
@@ -25,6 +27,8 @@ from pathlib import Path
 from agent_tree import discovery, tui
 from agent_tree.discovery import discover
 from agent_tree.grouping import build_tree
+from agent_tree.icons import PLACEHOLDER, payload
+from agent_tree.model import AgentKind
 from agent_tree.sidebar import SidebarManager, list_clients
 from agent_tree.tmux import SIDEBAR_OPTION, Tmux
 
@@ -356,6 +360,96 @@ class FollowIntegrationTests(unittest.TestCase):
         self.assertEqual(next(c for c in list_clients(self.tmux) if c.name == owner.name).session_name, "A")
         self.assertEqual(self.tmux.run("list-panes", "-a", "-F", "#{pane_id}").stdout.split(),
                          [first, second, third])
+
+    def test_image_frames_idle_migration_and_owned_passthrough(self):
+        self.tmux.run("set-option", "-s", "focus-events", "on")
+        self.tmux.run("set-option", "-t", "A:first", "mouse", "on")
+        owner = self.attach("A:first")
+        first, second = self.pane("A:first"), self.pane("A:second")
+        for kind in ("codex", "claude"):
+            executable = Path(self.workdir.name) / kind
+            executable.symlink_to("/bin/sleep")
+            self.tmux.run("new-window", "-d", "-t", "A", "-c", str(self.a), str(executable), "900")
+        env = dict(os.environ, TMUX_PANE=first, TERM_PROGRAM="iTerm.app")
+        subprocess.run([str(self.root / "bin/agent-tree"), "--socket", self.socket],
+                       env=env, cwd=self.root, check=True, capture_output=True)
+        manager = SidebarManager(self.tmux, "probe")
+        side = None
+        deadline = time.monotonic() + 20
+        while side is None and time.monotonic() < deadline:
+            side = next(iter(manager.owned_panes()), None)
+            if side is None:
+                time.sleep(0.05)
+        self.assertIsNotNone(side)
+        self.side = side
+        fd = self.clients[0][1]
+        def output(seconds, until=None):
+            data = b""
+            deadline = time.monotonic() + seconds
+            last_output = time.monotonic()
+            while time.monotonic() < deadline:
+                if select.select([fd], [], [], 0.05)[0]:
+                    with contextlib.suppress(BlockingIOError):
+                        data += os.read(fd, 65536)
+                        last_output = time.monotonic()
+                # 不能在 OSC 包或连续帧中途截断采集；等完整图片且输出安静下来。
+                if until is not None and until(data) and time.monotonic() - last_output >= 0.3:
+                    break
+            return data
+        kinds = (AgentKind.CODEX, AgentKind.CLAUDE_CODE, AgentKind.SHELL)
+        frame = output(20, until=lambda data: all(payload(kind).encode() in data for kind in kinds)
+                       and data.count(b"U=1,q=2") == 3 and PLACEHOLDER.encode() in data)
+        for kind in kinds:
+            self.assertEqual(frame.count(payload(kind).encode()), 1, f"{kind.value} PNG 只上传一次")
+        self.assertEqual(self.tmux.run("show-options", "-p", "-t", side,
+                                      "allow-passthrough").stdout.strip(), "allow-passthrough on")
+        self.assertEqual(self.tmux.run("show-options", "-g", "allow-passthrough").stdout.strip(),
+                         "allow-passthrough off")
+        self.assertEqual(self.tmux.run("show-options", "-p", "-t", first,
+                                      "allow-passthrough").stdout.strip(), "")
+        image_ids = re.findall(rb"_Ga=t,f=100,t=d,i=(\d+),q=2;", frame)
+        self.assertEqual(len(set(image_ids)), 3)
+        self.assertIn(PLACEHOLDER, self.capture(side), "tmux 必须保存图片位置标记")
+        self.tmux.run("send-keys", "-t", side, "j")
+        selected = output(1)
+        self.assertNotIn(b"_Ga=t", selected, "选中变化不应重新上传 PNG")
+        self.assertIn(PLACEHOLDER.encode(), selected)
+        self.assertNotIn(b"_Ga=t", output(3), "空闲刷新不应重复发送图片")
+        self.tmux.run("select-pane", "-t", side)
+        self.assertNotIn(b"_Ga=t", output(1))
+        os.write(fd, b"\x1b[<0;2;31M\x1b[<0;2;31m")
+        self.assertNotIn(b"_Ga=t", output(1), "点击底栏不应重新上传图片")
+        for y in list(range(2, 32)) + list(range(31, 1, -1)):
+            os.write(fd, f"\x1b[<35;12;{y}M".encode())
+            time.sleep(0.02)
+        self.assertNotIn(b"_Ga=t", output(1), "上下移动鼠标不应重新上传图片")
+        self.tmux.run("select-pane", "-t", first)
+        output(1)
+        for _ in range(3):
+            for x, target in ((2, side), (80, first)):
+                os.write(fd, f"\x1b[<0;{x};2M\x1b[<0;{x};2m".encode())
+                focus_output = output(1)
+                self.assertNotIn(b"_Ga=t", focus_output, "焦点切换不应重新上传 PNG")
+                self.assertNotIn(b"_Ga=p", focus_output, "焦点切换不应重建图片画布")
+                self.assertIn(PLACEHOLDER.encode(), focus_output,
+                              "宿主重绘必须保留真实图片的位置标记")
+                self.assertEqual(self.tmux.run("display-message", "-p", "-t", target,
+                                              "#{pane_active}").stdout.strip(), "1")
+        # 同尺寸跨 window 跟随也只移动 tmux 保存的位置标记。
+        self.tmux.run("switch-client", "-c", owner.name, "-t", "A:second")
+        moved = output(20, until=lambda data: PLACEHOLDER.encode() in data)
+        self.assertEqual(manager.location_of(side), manager.location_of(second))
+        self.assertNotIn(b"_Ga=t", moved)
+        self.assertNotIn(b"_Ga=p", moved)
+        self.assertEqual(self.tmux.run("show-options", "-p", "-t", side,
+                                      "allow-passthrough").stdout.strip(), "allow-passthrough on")
+        self.tmux.run("send-keys", "-t", side, "q")
+        exited = output(1)
+        for image_id in image_ids:
+            self.assertIn(b"_Ga=d,d=I,i=" + image_id + b",q=2", exited)
+        self.wait_for(lambda: manager.location_of(side) is None)
+        self.assertTrue(manager.alive(first))
+        self.assertTrue(manager.alive(second))
 
 
 if __name__ == "__main__":

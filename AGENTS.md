@@ -16,6 +16,7 @@
 - `.tmp/<task-slug>/`：临时调研及验证产物，不作为运行依赖。
 - `src/agent_tree/`：源码，Python 3.14。仅界面层依赖第三方库 textual；其余模块只用标准库。`__main__.py` 入口；`model.py` 数据模型；`tmux.py` tmux 访问层；`processes.py` 进程快照与进程树；`discovery.py` 身份识别与会话发现；`grouping.py` 按 Git 仓库根目录分组与树；`tui.py` 侧栏纯逻辑（行、折叠、选中、刷新、回调），不依赖界面框架；`ui.py` textual 界面；`sidebar.py` 自建侧栏生命周期、导航与新建会话。
 - `tests/`：标准库 `unittest` 单元测试与隔离的 tmux 集成测试；依赖 textual 的用例在缺依赖时自动跳过。
+- `src/agent_tree/icons.py`：PNG 资源、Kitty Graphics 缓存透传与图片位置标记编码；`src/agent_tree/assets/` 保存小尺寸 PNG 与来源说明，运行时不依赖图像处理库。
 - `pyproject.toml`：包声明与命令入口；运行时依赖仅 `textual`。
 - `.venv/`：本地虚拟环境，装有 textual；`bin/agent-tree` 优先使用它。不入库。
 
@@ -40,4 +41,4 @@ PYTHONPATH=src python3 -m agent_tree --snapshot              # 一次性打印�
 bin/agent-tree                                               # 在 tmux 内启动侧栏
 ```
 
-集成测试只使用独立 socket 与自建 pane，结束后清理，不接触用户会话。为不破坏用户鼠标与布局设置，侧栏对 tmux 选项的修改必须限定窗口级并恢复。textual 需要所在 pane 的 client 附着才会渲染，验证侧栏外观时须让该 session 有 client 附着（例如 `script -q /dev/null tmux -L <socket> attach -t <session>`）。
+集成测试只使用独立 socket 与自建 pane，结束后清理，不接触用户会话。为不破坏用户鼠标与布局设置，侧栏对 tmux 选项的修改必须限定窗口级并恢复；图片透传仅在本实例自建 pane 上设置 pane 级 `allow-passthrough`，随该 pane 回收，不修改用户 pane 或窗口选项。textual 需要所在 pane 的 client 附着才会渲染，验证侧栏外观时须让该 session 有 client 附着（例如 `script -q /dev/null tmux -L <socket> attach -t <session>`）。

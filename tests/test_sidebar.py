@@ -132,6 +132,42 @@ class ClientListingTests(unittest.TestCase):
         self.assertEqual(clients[1].activity, 7)
 
 
+class ImageHostTests(unittest.TestCase):
+    def test_passthrough_only_changes_owned_pane(self):
+        tmux = FakeTmux()
+        manager = make_manager(tmux)
+        self.assertTrue(manager.enable_images())
+        self.assertEqual(tmux.called("set-option"), [
+            ("set-option", "-p", "-t", "%9", "allow-passthrough", "on")])
+        tmux.panes["%9"] = "someone-else"
+        self.assertFalse(manager.enable_images())
+        self.assertEqual(len(tmux.called("set-option")), 1)
+
+    def test_geometry_accounts_for_top_status_and_rejects_hidden_zoomed_or_cropped(self):
+        tmux = FakeTmux()
+        manager = make_manager(tmux)
+        manager.client_name = "owner"
+        fields = ["s0", "s0", "1", "0", "3", "2", "120", "42", "120", "40", "top", "2", "@1"]
+        def answer(*args, **kwargs):
+            return subprocess.CompletedProcess(args, 0, SEP.join(fields), "")
+        with patch.object(tmux, "run", side_effect=answer):
+            self.assertEqual(manager.image_origin(), (3, 4, "@1"))
+            fields[10] = "bottom"
+            self.assertEqual(manager.image_origin(), (3, 2, "@1"))
+            for position, value in [(0, "other"), (2, "0"), (3, "1"), (6, "80"), (7, "20"), (4, "invalid")]:
+                old = fields[position]
+                fields[position] = value
+                self.assertIsNone(manager.image_origin())
+                fields[position] = old
+
+    def test_launch_passes_terminal_protocol_explicitly(self):
+        tmux = FakeTmux()
+        manager = make_manager(tmux, pane_id=None)
+        with patch.dict("os.environ", {"TERM_PROGRAM": "iTerm.app"}):
+            manager.launch("s0:0")
+        self.assertIn("AGENT_TREE_IMAGE_PROTOCOL=iterm", tmux.called("split-window")[0])
+
+
 class FollowClientTests(unittest.TestCase):
     def setUp(self):
         self.tmux = FakeTmux()
