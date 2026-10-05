@@ -23,7 +23,7 @@
 
 - 父子目录与 worktree 不自动合并；该分组规则已由单元与集成测试覆盖，真实终端效果待阶段 3 端到端验收。
 - 真实 Claude Code／Codex 身份识别已验证；包装启动（如 `node /path/claude`）仅有离线分支测试。
-- 鼠标点击未在真实终端验证（需要 tmux `mouse` 开启）；键盘 Enter 导航与原生切窗跟随已完成端到端验证。
+- 鼠标点击已通过真实 pty client 的 SGR 鼠标协议端到端验证（需要 tmux `mouse` 开启）；用户已确认实际鼠标切换正常。
 - socket 断开、导航瞬间目标 pane 被删除的在线时序未做端到端验证。
 - 启动窗口被多个 client 同时注视时，初始绑定取最近活跃者；该初始判定策略未在真实共享窗口中验证。绑定后不再按其他 client 的活跃度转移，隔离性已有真实双 client 验证。
 - 原生切窗后原侧栏窗口不可见，textual 定时器仍能完成迁移与重绘，已有端到端验证；导航到初始 detached session 的首帧延迟仍未独立测量。
@@ -31,6 +31,10 @@
 - 上游仅做静态源码核对，没有构建或运行；不继承其验收声明。
 
 ## 最近完成
+
+- 2026-10-05 08:52：修复鼠标点击侧栏无法进入会话：Textual 点击事件已是控件局部坐标，删除重复减去控件屏幕位置的计算；保留留白不响应，补充普通点击与滚动后点击回归。
+
+- 2026-10-05 08:46：参考侧边栏截图美化界面：近黑底色、标题与操作条留白、疏朗树线、蓝色选中竖线；窄屏优先保留项目名并按空间隐藏父路径。默认宽度由 30% 缩为 24%，显式宽度参数保持可用；更新说明与默认宽度测试。
 
 - 2026-10-05 08:39：提交 detached Agent 修复，并合并远程独立初始化历史；README 保留当前完整项目说明，远程 MIT LICENSE 原文纳入，双方历史保留，采用正常推送。
 
@@ -68,11 +72,13 @@
 
 - 2026-10-04 14:58：完成 Goal 1 检查点 3，实现自建侧栏 pane 生命周期与选中即切换导航；隔离端到端验证 33 项（22 + 11）全部通过，单元测试扩到 115 项；修复 argparse help 中含 `%` 导致启动器崩溃的问题，并补 `--in-pane` 接管守卫、启动器 tmux 错误处理与集成测试 socket 残留清理。
 
-- 2026-10-04 14:35：完成 Goal 1 检查点 2，实现 `src/agent_tree/` 发现、身份识别、目录分组与浏览 TUI；离线单元测试 78 项、隔离 tmux 集成测试 4 项通过，并用真实 `claude` 2.1.285 与 `codex` 0.160.0 完成识别验收。
-
-- 2026-10-04 14:08：完成 Goal 1 检查点 1 宿主可行性验证，45 项检查全部通过；确定技术栈为 Python 3.14 + 标准库，侧栏保持方式为迁移单个自建侧栏；新增 [验证记录](/Users/mac/workspace/agent-tree/docs/validation.md) 并同步架构决策。
-
 ## 最近验证
+
+- 2026-10-05 08:54：用户确认侧栏画面与鼠标切换均正常；提交前复核改动范围，`git diff --check` 与受影响文档本地链接检查通过。源码沿用已通过的 174 项完整回归及真实 pty 鼠标端到端验证结果。
+
+- 2026-10-05 08:52：鼠标修复完整回归 174 项全部通过，无跳过；独立 socket + 真实 pty client + SGR 鼠标协议点击 beta 组 Shell，侧栏迁到目标 window 且输入焦点交给目标 pane，测试资源已清理。只读核对用户 tmux `mouse=on`，未修改用户鼠标设置。探针为 `.tmp/sidebar-mouse/verify.py`。
+
+- 2026-10-05 08:46：侧栏样式与宽度改动完整回归 172 项全部通过，无跳过，覆盖隔离 tmux 原生切窗、焦点、宽度保持与长列表滚动；行渲染测试覆盖 14 列长路径截断与选中竖线。导出 34／14 列 headless SVG，普通预览核对树线与留白；Quick Look 彩色 SVG 转 PNG 的文字渲染异常，用户随后确认实际终端画面正常。
 
 - 2026-10-05 08:39：提交前完整回归 172 项全部通过，无跳过；`git diff --check` 与受影响文档本地链接检查通过。已核对远程 master 仅含独立初始化 README 与 MIT LICENSE，合并后保留两侧历史与远程 LICENSE，README 冲突按当前完整说明解决，源码与测试未改变。
 
@@ -107,9 +113,3 @@
 - 2026-10-04 15:52：对默认 socket 只读运行 `bin/agent-tree --snapshot`，条目由收窄前的 12 条降为 3 条，正好对应 `list-clients` 显示的 3 个附着 session（2、3、10）；新增单元测试覆盖 `only_attached` 过滤，集成测试用 detached session 验证被排除。离线 126 项、`AGENT_TREE_RUN_TMUX_TESTS=1` 时同批 126 项通过。
 
 - 2026-10-04 15:30：在独立 socket 上用假 Codex／Claude pane 运行侧栏并 `capture-pane -e` 核对配色：标题栏蓝底加粗、目录行青色方括号、选中行黑底白字高亮、Codex 绿色实心圆点、shell 蓝色空心圆点、连接线 `├─`／`└─`；确认「正在扫描会话…」占位帧在首次扫描前出现。离线单元测试 124 项、`AGENT_TREE_RUN_TMUX_TESTS=1` 时同批 124 项通过。真实终端配色观感待散帅确认。
-
-- 2026-10-04 14:58：`.tmp/tmux-sidebar-mvp/verify_cp3.py` 22 项、`verify_cp3_resilience.py` 14 项在独立 socket 上全部通过：侧栏创建与 30% 宽度、焦点落在侧栏、键盘选中即切换（无需回车）、侧栏 pane_id／pid 不变、跨 session 迁移与发起 client 切换、源 window 布局自动还原、`Right` 交出焦点、`q` 退出清理、窄屏拒绝、重复启动拒绝、多 client 隔离、`kill -9` 崩溃后 pane 关闭与布局还原、`--in-pane` 拒绝接管用户 shell pane，用户 pane 与 agent pane 全程保留。单元测试 119 项通过；集成测试重复运行后 socket 目录仅剩 `default`。详见 [验证记录](/Users/mac/workspace/agent-tree/docs/validation.md) 。
-
-- 2026-10-04 14:35：`PYTHONPATH=src python3 -m unittest discover -s tests -t tests` 为 78 项通过（4 项集成默认跳过）；`AGENT_TREE_RUN_TMUX_TESTS=1` 时隔离 tmux 集成测试 4 项通过。真实 `claude` 2.1.285（`pane_current_command` 为版本号）与 `codex` 0.160.0 均被正确识别；对默认 socket 只读运行 `--snapshot` 聚合出 5 个 Agent pane；交互界面在 tmux pane 中实机渲染并可用 `q` 退出；空状态与不存在的 socket 均返回明确结果。详见 [验证记录](/Users/mac/workspace/agent-tree/docs/validation.md) 。
-
-- 2026-10-04 14:08：在 tmux 3.7c 上用独立 socket `agent-tree-cp1` 与 `/tmp/at-probe` 运行 `.tmp/tmux-sidebar-mvp/probe_cp1.py`，步骤 A/B/C/D 共 45 项检查全部通过，覆盖枚举、稳定 ID、cwd 规范化、软链接、空格与中文路径、join-pane 迁移、布局自动还原、client 隔离、跨 session 导航与焦点、自排除标记、身份识别证据、窄屏与错误路径；测试资源已清理，用户会话未受影响。详见 [验证记录](/Users/mac/workspace/agent-tree/docs/validation.md) 。

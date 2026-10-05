@@ -31,13 +31,14 @@ from .tui import (
 )
 
 # 参考图取自暗色系：近黑底、灰次要文字、青绿强调。
-BG = "#0e1116"
-PANEL = "#161b22"
+BG = "#111111"
+PANEL = "#161616"
 DIM = "#6e7681"
 FAINT = "#484f58"
 TEXT = "#c9d1d9"
 BRIGHT = "#e6edf3"
 ACCENT = "#7ee787"
+SELECT_ACCENT = "#82aaff"
 ERROR = "#f85149"
 SEL_BG = "#21262d"
 
@@ -72,23 +73,23 @@ Screen {{
     color: {TEXT};
 }}
 #title {{
-    height: 1;
-    background: {PANEL};
+    height: 3;
+    background: {BG};
     color: {DIM};
-    padding: 0 1;
+    padding: 1 1;
 }}
 #scroll {{
     height: 1fr;
     scrollbar-size-vertical: 0;
 }}
 #body {{
-    padding: 1 0;
+    padding: 0;
 }}
 #foot {{
-    height: 1;
+    height: 3;
     background: {PANEL};
     color: {DIM};
-    padding: 0 1;
+    padding: 1 1;
 }}
 """
 
@@ -110,7 +111,7 @@ def _pad(line: Text, right: str, width: int, right_style: str = DIM) -> None:
     budget = width - right_width - 1 if right else width
     if cell_len(line.plain) > budget:
         line.truncate(max(1, budget), overflow="ellipsis")
-    gap = max(1, width - cell_len(line.plain) - right_width)
+    gap = max(0, width - cell_len(line.plain) - right_width)
     line.append(" " * gap)
     if right:
         line.append(right, style=right_style)
@@ -124,7 +125,7 @@ def group_line(row: Row, collapsed: set[str], selected: bool, width: int) -> Tex
     line.append(f"{mark} ", style=FAINT)
     line.append(f"[{group.label}]", style=f"bold {ACCENT}")
     hint = _short_path(group.display_path)
-    if hint:
+    if hint and cell_len(line.plain) + cell_len(hint) + len(str(len(group.sessions))) + 3 <= width:
         line.append(f"  {hint}", style=DIM)
     _pad(line, str(len(group.sessions)), width)
     return _highlight(line, selected, width)
@@ -145,6 +146,8 @@ def _highlight(line: Text, selected: bool, width: int) -> Text:
     """选中行使用低调的浅色背景块，并把整行补满背景。"""
     if not selected:
         return line
+    # 用蓝色竖线标出当前位置，保留树形连接线与整行的列宽。
+    line = Text("▎", style=SELECT_ACCENT) + line[1:]
     line.stylize(f"on {SEL_BG}")
     missing = width - cell_len(line.plain)
     if missing > 0:
@@ -220,7 +223,7 @@ class SidebarApp(App):
     def _width(self) -> int:
         body = self.query_one("#body", Static)
         size = body.content_size
-        return max(16, size.width or self.size.width or 32)
+        return max(1, size.width or self.size.width or 32)
 
     def _paint(self) -> None:
         self._paint_title()
@@ -230,8 +233,8 @@ class SidebarApp(App):
     def _paint_title(self) -> None:
         total = sum(len(group.sessions) for group in self.model.tree)
         text = Text()
-        text.append(" 会话", style=f"bold {TEXT}")
-        text.append(f"  ·  {total} 个", style=DIM)
+        text.append("会话", style=f"bold {DIM}")
+        _pad(text, str(total), max(1, self.size.width - 2))
         self.query_one("#title", Static).update(text)
 
     def _paint_foot(self) -> None:
@@ -239,8 +242,8 @@ class SidebarApp(App):
         if self.model.message:
             foot.update(Text(self.model.message, style=ERROR))
             return
-        hint = foot_text(self.model.can_navigate, self._width())
-        foot.update(Text(" " + hint, style=DIM))
+        hint = foot_text(self.model.can_navigate, max(1, self._width() - 2))
+        foot.update(Text(hint, style=DIM))
 
     def _paint_body(self) -> None:
         width = self._width()
@@ -265,6 +268,8 @@ class SidebarApp(App):
                         row, self.model.collapsed, index == self.model.selected, width
                     )
                 else:
+                    body.append("  │\n", style=FAINT)
+                    self._line_rows.append(None)
                     line = session_line(row, index == self.model.selected, width)
                 body.append_text(line)
                 body.append("\n")
@@ -326,7 +331,8 @@ class SidebarApp(App):
         widget = event.widget
         if widget is None or widget.id != "body":
             return
-        offset = event.y - widget.region.y
+        # Textual 鼠标事件已转换为接收控件的局部坐标，包括滚动后的内容位置。
+        offset = event.y
         if 0 <= offset < len(self._line_rows):
             index = self._line_rows[offset]
             if index is not None:

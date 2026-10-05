@@ -177,7 +177,7 @@ class DiscoveryIntegrationTests(unittest.TestCase):
         manager = SidebarManager(self.tmux, "itest-width")
         side = manager.launch("a:w")
         before = self._pane_width(side)
-        self.assertEqual(before, int(178 * 0.3))
+        self.assertEqual(before, int(178 * 0.24))
         manager.new_session(self.other)
         self.assertEqual(self._pane_width(side), before)
 

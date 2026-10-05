@@ -25,7 +25,7 @@ class ParserTests(unittest.TestCase):
         # 允许 help 中含百分号；渲染时不得抛 ValueError
         text = build_parser().format_help()
         self.assertIn("--width", text)
-        self.assertIn("30%", text)
+        self.assertIn("24%", text)
 
     def test_width_accepts_percent_and_absolute(self):
         parser = build_parser()

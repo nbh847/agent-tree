@@ -37,7 +37,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--width",
         default=DEFAULT_WIDTH,
-        help="侧栏宽度，取 tmux -l 的值（默认占总宽 30%%，也可写绝对列数）",
+        help=f"侧栏宽度，取 tmux -l 的值（默认占总宽 {DEFAULT_WIDTH.replace('%', '%%')}，也可写绝对列数）",
     )
     parser.add_argument(
         "--snapshot",

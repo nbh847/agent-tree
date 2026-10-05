@@ -67,6 +67,39 @@ def sample_rows():
 
 @unittest.skipUnless(HAVE_TEXTUAL, "需要安装 textual")
 class CurrentPaneUITests(unittest.IsolatedAsyncioTestCase):
+    async def test_mouse_click_navigates_and_ignores_tree_spacing(self):
+        tree = build_tree([make_session("%0"), make_session("%1")])
+        model = tui.SidebarModel(lambda: tree)
+        navigated = []
+        model.on_navigate = lambda session: navigated.append(session.backend_target)
+        app = ui.SidebarApp(model)
+        async with app.run_test(size=(40,20)) as pilot:
+            await pilot.pause()
+            await pilot.click("#body", offset=(8, 3))
+            self.assertEqual(navigated, [])
+            await pilot.click("#body", offset=(8, 4))
+            self.assertEqual(navigated, ["%1"])
+            self.assertEqual(model.current_session().backend_target, "%1")
+
+    async def test_mouse_click_navigates_after_scrolling(self):
+        tree = build_tree([make_session(f"%{i}") for i in range(30)])
+        model = tui.SidebarModel(lambda: tree)
+        navigated = []
+        model.on_navigate = lambda session: navigated.append(session.backend_target)
+        app = ui.SidebarApp(model)
+        async with app.run_test(size=(40,12)) as pilot:
+            await pilot.pause()
+            model.select(len(model.rows()) - 1)
+            app._paint_body()
+            await pilot.pause()
+            scroll = app.query_one("#scroll", ui.VerticalScroll)
+            self.assertGreater(scroll.scroll_y, 0)
+            # 点击可见末行；屏幕坐标经 Textual 转为 body 局部坐标。
+            line = app._line_rows.index(model.selected)
+            target = model.current_session().backend_target
+            await pilot.click("#body", offset=(8, line))
+            self.assertEqual(navigated, [target])
+
     async def test_followed_pane_scrolls_into_view(self):
         tree = build_tree([make_session(f"%{i}") for i in range(50)])
         model = tui.SidebarModel(lambda: tree)
@@ -132,6 +165,7 @@ class RowRenderTests(unittest.TestCase):
     def test_selected_line_fills_width_with_background(self):
         rows = sample_rows()
         line = ui.session_line(rows[1], True, 40)
+        self.assertTrue(line.plain.startswith("▎ "))
         self.assertEqual(cell_len(line.plain), 40)
         self.assertTrue(any(ui.SEL_BG in str(span.style) for span in line.spans))
 
@@ -141,7 +175,7 @@ class RowRenderTests(unittest.TestCase):
             [make_session("%0", "/Users/mac/workspace/opensource/deepseek-harness/sub/dir")]
         )
         rows = tui.visible_rows(tree, set())
-        for width in (20, 26, 32):
+        for width in (14, 20, 26, 32):
             line = ui.group_line(rows[0], set(), False, width)
             self.assertLessEqual(cell_len(line.plain), width, line.plain)
 

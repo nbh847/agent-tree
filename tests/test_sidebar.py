@@ -145,7 +145,7 @@ class FollowClientTests(unittest.TestCase):
     def test_follows_bound_client_without_switching_clients_or_focus(self):
         self.assertEqual(self.manager.follow_client(), "%1")
         self.assertEqual(self.tmux.called("join-pane"), [
-            ("join-pane", "-d", "-b", "-h", "-s", "%9", "-t", "%1", "-l", "30%")])
+            ("join-pane", "-d", "-b", "-h", "-s", "%9", "-t", "%1", "-l", "24%")])
         self.assertEqual(self.tmux.called("switch-client"), [])
         self.assertEqual(self.tmux.called("select-pane"), [])
         self.assertEqual(self.tmux.called("select-window"), [])
