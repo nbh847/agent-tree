@@ -70,6 +70,28 @@ def sample_rows():
 
 @unittest.skipUnless(HAVE_TEXTUAL, "需要安装 textual")
 class CurrentPaneUITests(unittest.IsolatedAsyncioTestCase):
+    async def test_selected_image_row_background_covers_all_three_full_width_lines(self):
+        model = tui.SidebarModel(lambda: build_tree([make_session(), make_session("%1")]))
+        app = ui.SidebarApp(model, image_origin=lambda: (0, 0, "@0"))
+        async with app.run_test(size=(40, 16)) as pilot:
+            await pilot.pause()
+            model.select(1)
+            app._paint_body()
+            await pilot.pause()
+            body = app.query_one("#body")
+            start = app._line_rows.index(model.selected)
+            for y in range(start, start + 3):
+                strip = body.render_line(y)
+                self.assertEqual(strip.cell_length, 40)
+                for segment in strip:
+                    self.assertEqual(segment.style.bgcolor.name, ui.SEL_BG)
+                    if PLACEHOLDER in segment.text:
+                        self.assertIn(segment.style.color.get_truecolor(),
+                                      [(i >> 16, (i >> 8) & 255, i & 255)
+                                       for i in app._image_ids.values()])
+            self.assertNotEqual(list(body.render_line(start + 3))[-1].style.bgcolor.name,
+                                ui.SEL_BG)
+
     async def test_host_focus_does_not_redraw_text_or_upload_png_again(self):
         app = ui.SidebarApp(tui.SidebarModel(lambda: build_tree([make_session()])),
                             image_origin=lambda: (0, 0, "@0"))

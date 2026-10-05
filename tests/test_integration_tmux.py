@@ -308,10 +308,20 @@ class FollowIntegrationTests(unittest.TestCase):
         return self.tmux.run("capture-pane", "-p", "-e", "-t", side).stdout
 
     @staticmethod
-    def highlighted_shell(line):
+    def highlighted_shell(text):
         # textual 在无色测试终端下会把 #21262d 映射成 #252525。
-        return "Shell" in line and any(bg in line for bg in (
-            "48;2;33;38;45", "48;2;37;37;37"))
+        # tmux 的 SGR 背景可跨行继承，三行高亮不必在名称行重复输出背景。
+        selected = False
+        for token in re.findall(r"\x1b\[[0-9;]*m|Shell", text):
+            if token == "Shell":
+                if selected:
+                    return True
+            elif token in ("\x1b[m", "\x1b[0m", "\x1b[49m"):
+                selected = False
+            elif "48;2;" in token:
+                selected = any(bg in token for bg in (
+                    "48;2;33;38;45", "48;2;37;37;37"))
+        return False
 
     def test_native_switch_follows_and_updates_rendered_selection(self):
         owner = self.attach("A:first")
@@ -332,9 +342,8 @@ class FollowIntegrationTests(unittest.TestCase):
         # prefix+n 走 tmux 原生绑定，侧栏没有发起导航。
         os.write(self.clients[0][1], b"\x02n")
         self.wait_for(lambda: manager.location_of(side) == manager.location_of(second))
-        self.wait_for(lambda: "[beta]" in self.capture(side) and any(
-            self.highlighted_shell(line)
-            for line in self.capture(side).split("[beta]", 1)[-1].splitlines()))
+        self.wait_for(lambda: "[beta]" in self.capture(side) and
+                      self.highlighted_shell(self.capture(side).split("[beta]", 1)[-1]))
         self.assertEqual(self.pane("A:second"), second, "跟随不能抢输入焦点")
         self.assertEqual(self.tmux.run("display-message", "-p", "-t", side, "#{pane_width}").stdout, width)
         self.assertEqual(self.tmux.run("display-message", "-p", "-t", first, "#{window_layout}").stdout, original_layout)
@@ -344,8 +353,7 @@ class FollowIntegrationTests(unittest.TestCase):
         self.tmux.run("switch-client", "-c", owner.name, "-t", "B:third")
         self.wait_for(lambda: manager.location_of(side) == manager.location_of(third))
         self.assertEqual(self.pane("B:third"), third)
-        self.wait_for(lambda: any(self.highlighted_shell(line)
-                                 for line in self.capture(side).split("[beta]", 1)[0].splitlines()))
+        self.wait_for(lambda: self.highlighted_shell(self.capture(side).split("[beta]", 1)[0]))
         self.tmux.run("switch-client", "-c", other.name, "-t", "A:first")
         time.sleep(0.6)
         self.assertEqual(manager.location_of(side), manager.location_of(third), "其他终端不能抢走侧栏")

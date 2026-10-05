@@ -80,6 +80,10 @@ Screen {{
 }}
 #body {{
     padding: 0;
+    width: 1fr;
+    /* 行已按列宽截断；换行处理会误裁图片组合标记后的行尾空格。 */
+    text-wrap: nowrap;
+    text-overflow: clip;
 }}
 #foot {{
     height: 3;
@@ -164,13 +168,14 @@ def session_line(row: Row, selected: bool, width: int, *, image_icons: bool = Fa
     return _highlight(line, selected, width)
 
 
-def session_spacer(row: Row, width: int, image_id: int | None, canvas_row: int) -> Text:
+def session_spacer(row: Row, width: int, image_id: int | None, canvas_row: int, *, selected: bool = False) -> Text:
     line = Text("   " if canvas_row == 2 and row.last else "  │", style=FAINT)
     column = session_icon_column(row, width)
     if image_id is not None and column is not None:
         line.append(" " * (column - 3))
         line.append(placeholder_row(image_id, canvas_row), style=f"#{image_id:06x} on {BG}")
-    return line
+    _pad(line, "", width)
+    return _highlight(line, selected, width)
 
 
 def _highlight(line: Text, selected: bool, width: int) -> Text:
@@ -222,6 +227,7 @@ class SidebarApp(App):
         model.on_exit = self.action_quit
         self.on_ready = on_ready
         self._line_rows: list[int | None] = []
+        self._viewport_width: int | None = None
         self.image_origin = image_origin
         self._image_origin: tuple[int, int, str] | None = None
         self._last_text: dict[str, Text] = {}
@@ -255,7 +261,8 @@ class SidebarApp(App):
         self.set_interval(self.model.refresh_seconds, self._tick)
         self.set_interval(0.25, self._sync_host)
 
-    def on_resize(self, _event: events.Resize) -> None:
+    def on_resize(self, event: events.Resize) -> None:
+        self._viewport_width = event.size.width
         self._paint()
 
     # ---- 刷新 ----
@@ -303,9 +310,7 @@ class SidebarApp(App):
         self.exit()
 
     def _width(self) -> int:
-        body = self.query_one("#body", Static)
-        size = body.content_size
-        return max(1, size.width or self.size.width or 32)
+        return max(1, self._viewport_width or self.size.width or 32)
 
     def _paint(self) -> None:
         self._paint_title()
@@ -359,7 +364,8 @@ class SidebarApp(App):
                     image_id = (self._image_ids.get(row.session.agent)
                                 if self._image_origin is not None and session_icon_column(row, width) is not None
                                 else None)
-                    body.append_text(session_spacer(row, width, image_id, 0))
+                    body.append_text(session_spacer(row, width, image_id, 0,
+                                                   selected=index == self.model.selected))
                     body.append("\n")
                     self._line_rows.append(index if self._image_origin is not None else None)
                     line = session_line(row, index == self.model.selected, width,
@@ -368,7 +374,8 @@ class SidebarApp(App):
                 body.append("\n")
                 self._line_rows.append(index)
                 if row.kind == "session":
-                    body.append_text(session_spacer(row, width, image_id, 2))
+                    body.append_text(session_spacer(row, width, image_id, 2,
+                                                   selected=index == self.model.selected))
                     body.append("\n")
                     self._line_rows.append(index if self._image_origin is not None else None)
 
