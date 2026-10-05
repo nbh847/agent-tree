@@ -4,7 +4,7 @@
 
 在用户现有终端旁显示一棵目录树，同一目录中的 Agent 会话集中展示。用户继续在原终端工作，通过侧栏快速判断哪些会话在执行、哪些需要处理，并切换到目标会话。
 
-已确定采用 tmux 方案：在当前 tmux window 左侧创建专用 pane 承载 TUI。首版以 macOS 上实际运行的 tmux 为目标，只覆盖所连接 server／socket 内**当前有 client 附着**的 session、window 的 pane，包括普通 shell；断开后遗留的 detached 会话不纳入，其他 socket 和 tmux 外部终端不自动纳入。**例外**：侧栏自身的导航会 `switch-client`，把 client 从原 session 移走使其变为 detached；为此本次侧栏运行期间曾附着过的 session 会一直保留，避免用户「选了一个窗口，原来那个就没了」。这里的「聚合」指逻辑分组，不搬移用户 pane；侧栏本身会占用列宽并改变当前 window 的布局。侧栏绑定启动它的 tmux client，跟随原生 window／session 切换，只迁移自建 pane，保留当前输入焦点。
+已确定采用 tmux 方案：在当前 tmux window 左侧创建专用 pane 承载 TUI。首版以 macOS 上实际运行的 tmux 为目标，覆盖所连接 server／socket 内当前有 client 附着的 session、window 的 pane，包括普通 shell；没有 client 附着但当前进程树仍能识别到 Claude Code／Codex 的 pane 同样纳入，不因 detached 隐藏仍存活的 Agent，重启侧栏后也适用。仅靠历史启动命令不能证明 Agent 仍存活；普通 detached shell 与未知程序不自动纳入，其他 socket 和 tmux 外部终端不自动纳入。**保留规则**：侧栏自身的导航会 `switch-client`，把 client 从原 session 移走使其变为 detached；为此本次侧栏运行期间曾附着过的 session 会一直保留，避免用户「选了一个窗口，原来那个就没了」。这里的「聚合」指逻辑分组，不搬移用户 pane；侧栏本身会占用列宽并改变当前 window 的布局。侧栏绑定启动它的 tmux client，跟随原生 window／session 切换，只迁移自建 pane，保留当前输入焦点。
 
 ## 侧栏信息与交互
 
@@ -22,7 +22,7 @@
 
 进入其他 session 的会话时会执行 tmux `switch-client`：把你发起操作的那个终端一起切到目标 session，原 session 变为 detached。这是「定位到对应终端」的固有代价——一个 tmux client 同一时刻只能看一个 session。跳转多次后可能出现两个终端停在同一个 session 上，此时侧栏对该 session 只列一条（两边看的是同一个窗口）。轻量的浏览（`↑`／`↓`）绝不触发它。
 
-**退出侧栏时必须把被带走的终端送回它原来的 session**（仅当它仍停在被带去的位置，用户自己切换过则不干预）。否则那个 session 会一直 detached，而侧栏的范围是「只看附着会话」，下次启动就会少列一条。
+**退出侧栏时必须把被带走的终端送回它原来的 session**（仅当它仍停在被带去的位置，用户自己切换过则不干预）。这样避免导航把用户终端长期留在别的 session；仍存活的 Agent 即使 detached 也必须可见，普通 detached shell 仍遵循附着与本次保留规则。
 
 支持展开／折叠与当前会话高亮。原生切换 window／session／pane 后，高亮同步到当前用户 pane，自动展开对应分组并滚动到所在行；返回侧栏浏览时保留用户选择，其他 client 的活动不抢走侧栏。`↑`／`↓` 只移动高亮，不改变当前视图；`Enter`（或鼠标点击会话）**进入选中会话**--切换视图并把输入焦点交给目标 pane；`→` 与 `Esc` 与 `Enter` 等价，不向 Agent 发送这些按键；`n` 在选中行所属目录下新建一个 session（默认 shell），建好后把 client 与侧栏一起带过去，这是侧栏唯一会新建终端的操作，且只新增 session、不改动既有 pane。选中目录组只展开／折叠，不切换终端。侧栏旁的用户 pane 全部关闭（如 shell 执行 `exit`）时自动补位：优先迁移到被关会话所在目录分组的第一个会话并把焦点交给新 pane，该分组不在了取整个列表的第一个；列表为空则退出侧栏，session 与终端交由 tmux 自然收摊。数据刷新、初次加载和程序恢复选择不触发导航（上述补位除外）；状态更新不抢焦点、不突然改变行顺序。完整路径与状态来源可在详情中查看。首次进入无数据时区分「没有 Agent」「无法读取目录」「宿主未连接」，不统一显示为空。
 

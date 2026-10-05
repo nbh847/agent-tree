@@ -162,7 +162,7 @@ class DiscoverTests(unittest.TestCase):
         procs = {100: make_proc(100, 1, "/usr/bin/python3", "-m", "agent_tree")}
         self.assertEqual(run_discover(panes, procs), [])
 
-    def test_only_attached_drops_detached_sessions(self):
+    def test_only_attached_keeps_live_detached_agents(self):
         panes = [
             make_pane("%0", start="claude", pid=100, attached=1),
             make_pane("%1", start="codex", pid=200, attached=0),
@@ -173,10 +173,39 @@ class DiscoverTests(unittest.TestCase):
         }
         self.assertEqual(len(run_discover(panes, procs)), 2)
         kept = run_discover(panes, procs, only_attached=True)
-        self.assertEqual([session.backend_target for session in kept], ["%0"])
+        self.assertEqual([session.backend_target for session in kept], ["%0", "%1"])
+
+    def test_detached_agents_visible_after_restart_with_empty_keep(self):
+        panes = [make_pane("%0", pid=100), make_pane("%1", pid=200)]
+        procs = {100: make_proc(100, 1, "/x/codex"),
+                 200: make_proc(200, 1, "node", "/x/claude")}
+        for _ in range(2):
+            keep = set()
+            sessions = run_discover(panes, procs, only_attached=True, keep_sessions=keep)
+            self.assertEqual([s.backend_target for s in sessions], ["%0", "%1"])
+            self.assertEqual(keep, set())
+
+    def test_detached_shell_unknown_and_stale_start_command_stay_hidden(self):
+        panes = [make_pane("%0", pid=100),
+                 make_pane("%1", start="codex", pid=200),
+                 make_pane("%2", pid=300),
+                 make_pane("%3", start="claude", pid=400)]
+        procs = {100: make_proc(100, 1, "zsh"),
+                 200: make_proc(200, 1, "zsh"),
+                 300: make_proc(300, 1, "sleep", "900")}
+        self.assertEqual(run_discover(panes, procs, only_attached=True), [])
+        with mock.patch.object(processes, "snapshot", return_value={}):
+            self.assertEqual(discovery.discover(FakeTmux(panes), "/sock", only_attached=True), [])
+
+    def test_detached_agent_exit_to_shell_removes_exception(self):
+        pane = make_pane("%0", start="", pid=100)
+        procs = {100: make_proc(100, 1, "zsh"), 101: make_proc(101, 100, "/x/codex")}
+        self.assertEqual(len(run_discover([pane], procs, only_attached=True)), 1)
+        procs.pop(101)
+        self.assertEqual(run_discover([pane], procs, only_attached=True), [])
 
     def test_keep_sessions_records_attached_and_retains_after_detach(self):
-        # 第一次：a 附着、b 断开 → b 被过滤，a 记入 keep_sessions
+        # 第一次：a 附着、b 断开 → 存活 Agent 均可见，但只有 a 记入 keep_sessions。
         attached = [
             make_pane("%0", start="claude", pid=100, session="a", attached=1),
             make_pane("%1", start="codex", pid=200, session="b", attached=0),
@@ -187,7 +216,7 @@ class DiscoverTests(unittest.TestCase):
         }
         keep: set[str] = set()
         first = run_discover(attached, procs, only_attached=True, keep_sessions=keep)
-        self.assertEqual([session.session_name for session in first], ["a"])
+        self.assertEqual([session.session_name for session in first], ["a", "b"])
         self.assertEqual(keep, {"a"})
 
         # 导航后 a 变成 detached（switch-client），但它已在 keep 中，仍应显示

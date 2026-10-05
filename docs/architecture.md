@@ -18,7 +18,7 @@
 
 会话键必须包含宿主身份：使用 tmux server／socket 身份加 pane ID；PID、名称、window 序号都不能单独作为稳定 ID。项目分组键使用 host 身份与规范化绝对路径；不盲目小写 macOS 路径，不假设卷一定不区分大小写。旧连接或旧 generation 的异步结果不能覆盖新快照。
 
-tmux 优先读取 pane 的 current path、current command、PID 等元数据，再对同一 TTY／进程子树补充识别。pane 的 cwd 不一定反映 Agent 内部切换的目录，无法确认时保留最近可信来源并标注。包装命令与 hook 可提供更强证据，但属于后续可选集成，不要求用户改变启动方式才能看到基础条目。
+tmux 优先读取 pane 的 current path、current command、PID 等元数据，再对同一 TTY／进程子树补充识别。发现范围先排除自建侧栏，再读取进程树：附着 session 与本次曾附着 session 保留；其他 detached pane 只在当前进程树中识别到 Agent 时保留，不能仅凭 pane 的历史启动命令纳入。因此侧栏重启后仍能找到运行中的 detached Agent，又不会把全部遗留 shell 加回来。pane 的 cwd 不一定反映 Agent 内部切换的目录，无法确认时保留最近可信来源并标注。包装命令与 hook 可提供更强证据，但属于后续可选集成，不要求用户改变启动方式才能看到基础条目。
 
 ## Agent 与状态检测
 

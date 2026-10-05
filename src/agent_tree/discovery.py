@@ -150,8 +150,8 @@ def discover(
     普通 shell 标为 ``SHELL``，无法可靠识别的非 shell 进程标为 ``UNKNOWN``。
     这样侧栏能呈现 tmux 的完整全貌，也能看出哪个窗口正跑着 Agent。
 
-    ``only_attached=True`` 时只保留所在 session 有 client 附着的 pane，用于贴合
-    用户「我打开的窗口」的直觉，忽略断开后遗留的 session。
+    ``only_attached=True`` 时保留附着会话，以及进程树中仍能识别到 Agent 的 detached
+    pane。普通 detached shell 不因此纳入；启动命令本身不能证明 Agent 仍存活。
 
     但侧栏导航会 ``switch-client``，把 client 从原 session 移走使其变成 detached；
     若原 session 就此从列表消失，用户会觉得「刚才那个窗口没了」。因此
@@ -166,15 +166,19 @@ def discover(
     for pane in panes:
         if pane.is_sidebar:
             continue
+        procs_in_tree = (
+            processes.subtree(procs, pane.pane_pid) if pane.pane_pid > 0 else []
+        )
         if only_attached:
             if pane.session_attached:
                 if keep_sessions is not None:
                     keep_sessions.add(pane.session_name)
             elif keep_sessions is None or pane.session_name not in keep_sessions:
-                continue
-        procs_in_tree = (
-            processes.subtree(procs, pane.pane_pid) if pane.pane_pid > 0 else []
-        )
+                # detached 与进程存活无关：CLI 仍在运行时必须可见。
+                # 只看当前进程，避免已经退出的 Agent 被历史启动命令重新纳入。
+                live_signature, _, _ = identify("", procs_in_tree)
+                if live_signature is None:
+                    continue
         signature, confidence, _evidence = identify(pane.pane_start_command, procs_in_tree)
         if signature is not None:
             agent, display_name, marker = signature.kind, signature.display_name, signature.marker

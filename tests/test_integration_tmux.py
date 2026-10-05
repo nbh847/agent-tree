@@ -95,7 +95,7 @@ class DiscoveryIntegrationTests(unittest.TestCase):
         self.assertEqual(shell.display_name, "Shell")
         self.assertEqual(shell.marker, "$")
 
-    def test_only_attached_excludes_detached_sessions(self) -> None:
+    def test_detached_live_agent_visible_after_restart(self) -> None:
         # new-session -d 建出的是 detached session（session_attached=0）
         self.tmux.run(
             "new-session", "-d", "-s", "agent", "-n", "a", "-c", self.proj,
@@ -103,6 +103,11 @@ class DiscoveryIntegrationTests(unittest.TestCase):
         )
         host = self.tmux.server_key()
         self.assertEqual(len(discover(self.tmux, host)), 1)
+        self.tmux.run("new-session", "-d", "-s", "shell", "-n", "w", "-c", self.other)
+        for _ in range(2):
+            kept = discover(self.tmux, host, only_attached=True, keep_sessions=set())
+            self.assertEqual([s.session_name for s in kept], ["agent"])
+        self.tmux.run("kill-session", "-t", "agent")
         self.assertEqual(discover(self.tmux, host, only_attached=True), [])
 
     def test_keep_sessions_retains_detached_session(self) -> None:

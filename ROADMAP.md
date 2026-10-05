@@ -32,6 +32,8 @@
 
 ## 最近完成
 
+- 2026-10-05 08:32：修复 detached Codex／Claude Code 被附着过滤隐藏的问题。发现时先检查当前进程树，存活 Agent 即使 detached、且本次 keep_sessions 为空也显示；普通遗留 shell 与仅有历史 Agent 启动命令的 pane 不自动纳入。172 项完整回归通过，默认 server 只读快照中 agent-tree 同时列出 Codex %0 与 %4。
+
 - 2026-10-05 08:24：将当前文档、源码、启动脚本和测试纳入首次 Git 基线提交，为独立 worktree 开发提供起点；忽略本地虚拟环境、临时产物与真实环境配置，不推送远程。
 
 - 2026-10-05 08:19：实现原生切窗跟随：侧栏绑定启动 client，每 0.25 秒追踪 window／session，用 `join-pane -d` 迁移自建 pane 并保留目标焦点；同步当前 pane 高亮、展开分组与滚动位置，刷新按稳定会话键保留浏览选择。宽度传入侧栏子进程；用户主动跨 session 切换后不还原旧导航起点。目标过窄、已有其他侧栏、失效或 client 断开时不接管其他终端。新增单元、真实 pty／textual 集成及 headless 滚动测试，169 项全部通过。
@@ -70,9 +72,11 @@
 
 - 2026-10-04 13:34：初始化本地 Git 仓库并关联 `origin` 至 `git@github.com:nbh847/agent-tree.git`；本地分支已改为远程使用的 `master`，无本地 `main` 分支，尚未提交或推送。
 
-- 2026-10-04 13:21：编写 Goal 1 基础侧栏施工清单，明确范围、检查点、失败路径与交付标准；同步选中即切换和焦点交互。
-
 ## 最近验证
+
+- 2026-10-05 08:39：提交前完整回归 172 项全部通过，无跳过；`git diff --check` 与受影响文档本地链接检查通过。已核对远程 master 仅含独立初始化 README 与 MIT LICENSE，准备保留两侧历史后正常推送。
+
+- 2026-10-05 08:32：完整回归 `AGENT_TREE_RUN_TMUX_TESTS=1 PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -t tests`：172 项全部通过；离线执行 172 项、9 项集成跳过。新增重启时 detached Agent 保留、包装启动识别、普通 shell／未知程序／缺失进程／历史启动命令过滤、Agent 退出与关闭后移除的单元和隔离 tmux 验证。`bin/agent-tree --snapshot` 只读默认 server，agent-tree 组包含 %0 与 %4 两个 Codex。
 
 - 2026-10-05 08:24：首次提交前运行 `AGENT_TREE_RUN_TMUX_TESTS=1 PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -t tests`，169 项全部通过、无跳过；Markdown 本地链接检查通过。沙箱内首次运行有 9 项 tmux 集成错误（测试 socket 不存在），申请沙箱外执行后全量通过。
 
@@ -109,7 +113,3 @@
 - 2026-10-04 14:35：`PYTHONPATH=src python3 -m unittest discover -s tests -t tests` 为 78 项通过（4 项集成默认跳过）；`AGENT_TREE_RUN_TMUX_TESTS=1` 时隔离 tmux 集成测试 4 项通过。真实 `claude` 2.1.285（`pane_current_command` 为版本号）与 `codex` 0.160.0 均被正确识别；对默认 socket 只读运行 `--snapshot` 聚合出 5 个 Agent pane；交互界面在 tmux pane 中实机渲染并可用 `q` 退出；空状态与不存在的 socket 均返回明确结果。详见 [验证记录](/Users/mac/workspace/agent-tree/docs/validation.md) 。
 
 - 2026-10-04 14:08：在 tmux 3.7c 上用独立 socket `agent-tree-cp1` 与 `/tmp/at-probe` 运行 `.tmp/tmux-sidebar-mvp/probe_cp1.py`，步骤 A/B/C/D 共 45 项检查全部通过，覆盖枚举、稳定 ID、cwd 规范化、软链接、空格与中文路径、join-pane 迁移、布局自动还原、client 隔离、跨 session 导航与焦点、自排除标记、身份识别证据、窄屏与错误路径；测试资源已清理，用户会话未受影响。详见 [验证记录](/Users/mac/workspace/agent-tree/docs/validation.md) 。
-
-- 2026-10-04 13:34：只读 `git ls-remote origin` 请求成功，确认 SSH 认证与远程读取正常，远程分支为 `master`；核对本地 HEAD 指向 `master`，无 `main` 引用。
-
-- 2026-10-04 13:21：施工清单与产品、架构及项目规范一致；本地链接、表格、尾随空白和破折号检查通过，未实施或运行功能。

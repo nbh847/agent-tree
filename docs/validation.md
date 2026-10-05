@@ -2,6 +2,14 @@
 
 本文件保存 agent-tree 的阶段验证过程、环境版本、结果与未覆盖范围。只记录实际执行过的验证，未运行的事项标为未验证。
 
+## 2026-10-05 08:32：detached Agent 发现修复
+
+完整回归 172 项全部通过（含隔离 tmux 与真实 textual／pty）；离线执行 172 项，9 项集成跳过。
+
+- 单元测试确认：detached Codex 与包装启动的 Claude Code 在空 keep_sessions 下仍可见，模拟侧栏重启后仍保留；普通 detached shell、未知进程、历史 Agent 启动命令、缺失进程不自动纳入；Agent 退出回到 shell 后取消存活 Agent 例外。
+- 隔离 tmux 确认：detached Codex 在重新扫描时保留，旁侧普通 detached shell 隐藏，关闭 Codex session 后条目移除。
+- 默认 server 只读运行 `bin/agent-tree --snapshot`，agent-tree 组同时显示 %0 与 %4 两个 Codex；没有修改用户 session、client 或 pane，也没有重启用户正在运行的侧栏。已运行的侧栏需要退出后重新启动以加载新版发现规则。
+
 ## 2026-10-05 08:19：原生切窗跟随与当前行同步
 
 环境：macOS、Python 3.14.8、tmux 3.7c；项目 `.venv` 中的 textual。验证使用独立随机 socket、两个真实 pty client 和真实侧栏进程，不接触用户 session。
