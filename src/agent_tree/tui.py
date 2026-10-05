@@ -180,10 +180,18 @@ class SidebarModel:
         self.selected = max(0, min(count - 1, index))
 
     def move(self, delta: int) -> None:
-        count = len(self.rows())
-        if count == 0:
+        indices = [index for index, row in enumerate(self.rows()) if row.kind == "session"]
+        if not indices or delta == 0:
             return
-        self.selected = max(0, min(count - 1, self.selected + delta))
+        if self.selected in indices:
+            position = indices.index(self.selected) + delta
+        elif delta > 0:
+            position = next((i for i, index in enumerate(indices) if index > self.selected), len(indices) - 1)
+            position += delta - 1
+        else:
+            position = next((i for i in range(len(indices) - 1, -1, -1) if indices[i] < self.selected), 0)
+            position += delta + 1
+        self.selected = indices[max(0, min(len(indices) - 1, position))]
 
     def toggle_current(self) -> None:
         row = self._current()

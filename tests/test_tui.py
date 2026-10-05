@@ -158,9 +158,38 @@ class SidebarModelTests(unittest.TestCase):
     def test_move_clamps_at_both_ends(self):
         model = self._model()
         model.move(-10)
-        self.assertEqual(model.selected, 0)
+        self.assertEqual(model.selected, 1)
         model.move(10)
         self.assertEqual(model.selected, len(model.rows()) - 1)
+
+    def test_move_skips_group_rows_in_both_directions(self):
+        model = self._model()
+        for delta, expected in [(1, 1), (1, 2), (1, 4), (-1, 2), (-1, 1), (-1, 1)]:
+            model.move(delta)
+            self.assertEqual(model.selected, expected)
+            self.assertIsNotNone(model.current_session())
+
+    def test_move_from_group_selects_session_in_requested_direction(self):
+        model = self._model()
+        model.select(3)
+        model.move(-1)
+        self.assertEqual(model.selected, 2)
+        model.select(3)
+        model.move(1)
+        self.assertEqual(model.selected, 4)
+
+    def test_move_skips_collapsed_groups_and_handles_no_visible_sessions(self):
+        model = self._model()
+        model.collapsed.add("/tmp/alpha")
+        model.move(1)
+        self.assertEqual(model.current_session().backend_target, "%2")
+        model.collapsed.update(group.key for group in model.tree)
+        model.select(0)
+        model.move(1)
+        self.assertEqual(model.selected, 0)
+        model = self._model(build_tree([]))
+        model.move(-1)
+        self.assertIsNone(model.current_row())
 
     def test_select_clamps(self):
         model = self._model()

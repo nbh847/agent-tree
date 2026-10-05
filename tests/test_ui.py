@@ -67,6 +67,59 @@ def sample_rows():
 
 @unittest.skipUnless(HAVE_TEXTUAL, "需要安装 textual")
 class CurrentPaneUITests(unittest.IsolatedAsyncioTestCase):
+    async def test_group_click_toggles_children_and_survives_refresh(self):
+        tree = build_tree([make_session("%0", "/tmp/alpha"), make_session("%1", "/tmp/beta")])
+        model = tui.SidebarModel(lambda: tree)
+        navigated = []
+        model.on_navigate = navigated.append
+        app = ui.SidebarApp(model)
+        async with app.run_test(size=(40, 20)) as pilot:
+            await pilot.click("#body", offset=(0, 0))
+            self.assertIn("/tmp/alpha", model.collapsed)
+            self.assertEqual([row.session.backend_target for row in model.rows() if row.session], ["%1"])
+            app._tick()
+            await pilot.pause()
+            self.assertIn("/tmp/alpha", model.collapsed)
+            await pilot.click("#body", offset=(4, 0))
+            self.assertNotIn("/tmp/alpha", model.collapsed)
+            self.assertEqual([row.session.backend_target for row in model.rows() if row.session], ["%0", "%1"])
+            self.assertEqual(navigated, [])
+
+    async def test_arrow_keys_only_select_child_sessions(self):
+        tree = build_tree([make_session("%0", "/tmp/alpha"), make_session("%1", "/tmp/beta")])
+        model = tui.SidebarModel(lambda: tree)
+        navigated = []
+        model.on_navigate = navigated.append
+        app = ui.SidebarApp(model)
+        async with app.run_test(size=(40, 20)) as pilot:
+            for key, target in [("down", "%0"), ("down", "%1"), ("down", "%1"), ("up", "%0"), ("up", "%0")]:
+                await pilot.press(key)
+                self.assertEqual(model.current_session().backend_target, target)
+            self.assertEqual(navigated, [])
+
+    async def test_group_button_creates_in_clicked_directory_without_navigation(self):
+        tree = build_tree([make_session("%0", "/tmp/alpha"), make_session("%1", "/tmp/beta")])
+        model = tui.SidebarModel(lambda: tree)
+        created, navigated = [], []
+        model.on_new_session = created.append
+        model.on_navigate = navigated.append
+        app = ui.SidebarApp(model)
+        async with app.run_test(size=(20, 20)) as pilot:
+            await pilot.pause()
+            index = next(i for i, row in enumerate(model.rows()) if row.kind == "group" and row.group.display_path == "/tmp/beta")
+            line = app._line_rows.index(index)
+            await pilot.click("#body", offset=(18, line))
+            self.assertEqual(created, ["/tmp/beta"])
+            self.assertEqual(navigated, [])
+            self.assertNotIn("/tmp/beta", model.collapsed)
+            await pilot.click("#body", offset=(4, line))
+            self.assertEqual(created, ["/tmp/beta"])
+            await pilot.pause()
+            self.assertIn("/tmp/beta", model.collapsed)
+            await pilot.click("#body", offset=(18, line))
+            self.assertEqual(created, ["/tmp/beta", "/tmp/beta"])
+            self.assertIn("/tmp/beta", model.collapsed)
+
     async def test_mouse_click_navigates_and_ignores_tree_spacing(self):
         tree = build_tree([make_session("%0"), make_session("%1")])
         model = tui.SidebarModel(lambda: tree)
@@ -125,6 +178,16 @@ class CurrentPaneUITests(unittest.IsolatedAsyncioTestCase):
 
 @unittest.skipUnless(HAVE_TEXTUAL, "需要安装 textual")
 class RowRenderTests(unittest.TestCase):
+    def test_create_button_survives_narrow_and_chinese_paths(self):
+        rows = tui.visible_rows(build_tree([make_session(cwd="/tmp/很长的中文项目目录")]), set())
+        for width in (8, 14, 40):
+            line = ui.group_line(rows[0], set(), True, width, can_create=True)
+            self.assertTrue(line.plain.endswith("[+]"))
+            self.assertEqual(cell_len(line.plain), width)
+        unknown = tui.visible_rows(build_tree([make_session(cwd=None)]), set())[0]
+        self.assertNotIn("[+]", ui.group_line(unknown, set(), False, 40, can_create=True).plain)
+        self.assertNotIn("[+]", ui.group_line(rows[0], set(), False, 40).plain)
+
     def test_group_line_uses_brackets_and_right_aligned_count(self):
         rows = sample_rows()
         line = ui.group_line(rows[0], set(), False, 40)

@@ -117,17 +117,21 @@ def _pad(line: Text, right: str, width: int, right_style: str = DIM) -> None:
         line.append(right, style=right_style)
 
 
-def group_line(row: Row, collapsed: set[str], selected: bool, width: int) -> Text:
+def group_line(row: Row, collapsed: set[str], selected: bool, width: int, *, can_create: bool = False) -> Text:
     """目录行：折叠标记 + 方括号目录名 + 暗淡父级路径 + 右对齐会话数。"""
     group = row.group
+    button = can_create and bool(group.display_path) and width >= 8
+    content_width = width - 4 if button else width
     line = Text()
     mark = COLLAPSED_MARK if group.key in collapsed else EXPANDED_MARK
     line.append(f"{mark} ", style=FAINT)
     line.append(f"[{group.label}]", style=f"bold {ACCENT}")
     hint = _short_path(group.display_path)
-    if hint and cell_len(line.plain) + cell_len(hint) + len(str(len(group.sessions))) + 3 <= width:
+    if hint and cell_len(line.plain) + cell_len(hint) + len(str(len(group.sessions))) + 3 <= content_width:
         line.append(f"  {hint}", style=DIM)
-    _pad(line, str(len(group.sessions)), width)
+    _pad(line, str(len(group.sessions)), content_width)
+    if button:
+        line.append(" [+]", style=f"bold {SELECT_ACCENT}")
     return _highlight(line, selected, width)
 
 
@@ -265,7 +269,8 @@ class SidebarApp(App):
                         body.append("\n")  # 目录之间留白
                         self._line_rows.append(None)
                     line = group_line(
-                        row, self.model.collapsed, index == self.model.selected, width
+                        row, self.model.collapsed, index == self.model.selected, width,
+                        can_create=self.model.on_new_session is not None,
                     )
                 else:
                     body.append("  │\n", style=FAINT)
@@ -336,7 +341,20 @@ class SidebarApp(App):
         if 0 <= offset < len(self._line_rows):
             index = self._line_rows[offset]
             if index is not None:
-                self._select(index)
+                row = self.model.rows()[index]
+                width = self._width()
+                if (row.kind == "group" and row.group.display_path
+                        and self.model.on_new_session is not None and width >= 8
+                        and width - 3 <= event.x < width):
+                    self.model.select(index)
+                    self.action_new_session()
+                    event.stop()
+                elif row.kind == "group":
+                    self.model.select(index)
+                    self.action_toggle()
+                    event.stop()
+                else:
+                    self._select(index)
 
 
 def run_sidebar(model: SidebarModel, on_ready: Callable[[], None] | None = None) -> None:
