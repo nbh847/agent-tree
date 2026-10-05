@@ -10,9 +10,9 @@
 
 方向键只移动高亮，Enter／右方向键／Esc／鼠标点击进入选中会话并将焦点交给目标 pane。绑定 client 的当前用户 pane 改变时，同步高亮、展开所在分组并滚动到对应行；焦点回到侧栏后保留浏览中的选择。刷新导致条目重排时按稳定会话键保留选择。用户主动跨 session 切换后取消之前导航的还原记录，退出时不拉回旧起点。
 
-图片图标由 `icons.py` 加载包内 32 × 48 PNG（32 × 32 图案上下各留八像素背景），使用标准库缓存 Base64。使用 [Kitty Graphics 的 Unicode 图片位置标记](https://sw.kovidgoyal.net/kitty/graphics-protocol/#unicode-placeholders) ：PNG 先通过 tmux DCS 上传到终端缓存，创建四列宽、三行高的虚拟画布；普通文本帧在名称右侧输出 U+10EEEE 与三枚组合标记，分别编码图片行、列和 ID 的高字节，前景 RGB 保存 24 位图片 ID。每个实例随机分配三个 ID，启动时三种 PNG 各上传一次，上传先于包含位置标记的文本帧。实际显示仍由 PNG 提供，不依赖字体绘制图标。资源来源见 [图标说明](/Users/mac/workspace/agent-tree/src/agent_tree/assets/README.md) 。
+图片图标由 `icons.py` 加载包内 32 × 48 PNG（32 × 32 图案上下各留八像素背景），使用标准库缓存 Base64。使用 [Kitty Graphics 的 Unicode 图片位置标记](https://sw.kovidgoyal.net/kitty/graphics-protocol/#unicode-placeholders) ：PNG 先通过 tmux DCS 上传到终端缓存，创建四列宽、三行高的虚拟画布；普通文本帧在名称右侧输出 U+10EEEE 与三枚组合标记，分别编码图片行、列和 ID 的高字节，前景 RGB 保存 24 位图片 ID。每个实例随机分配四个 ID，启动时四种 PNG 各上传一次，上传先于包含位置标记的文本帧。实际显示仍由 PNG 提供，不依赖字体绘制图标。资源来源见 [图标说明](/Users/mac/workspace/agent-tree/src/agent_tree/assets/README.md) 。
 
-图片位置标记作为字符保存在 tmux 的 pane 画面内。宿主切换焦点、窗口重绘与跨窗口迁移时，终端根据重绘的标记显示缓存图片，无需清旧图或补画；滚动、裁剪与折叠随 Textual 的普通文字处理，不再向宿主直接写绝对图片坐标。三行条目仍在中间行显示名称，图案占画布中间两行；选中背景不改变编码图片 ID 的前景色。正常退出与自动退出只释放本实例的三个图片 ID，异常退出在应用 driver 停止后回收剩余缓存，不使用清空宿主全部图片的命令。
+图片位置标记作为字符保存在 tmux 的 pane 画面内。宿主切换焦点、窗口重绘与跨窗口迁移时，终端根据重绘的标记显示缓存图片，无需清旧图或补画；滚动、裁剪与折叠随 Textual 的普通文字处理，不再向宿主直接写绝对图片坐标。三行条目仍在中间行显示名称，图案占画布中间两行；选中背景不改变编码图片 ID 的前景色。正常退出与自动退出只释放本实例的四个图片 ID，异常退出在应用 driver 停止后回收剩余缓存，不使用清空宿主全部图片的命令。
 
 导航列表禁用文本选区和控件点击聚焦；标题、列表与底栏关闭自动链接悬停，`app_focus` 保留框架状态处理但不触发额外整屏重绘。删除旧 OSC 1337 叠图、区域碰撞检测、显式空格清图、焦点补画及启动延迟补画。宿主查询仍用于判断绑定 client 中侧栏是否可见，zoom 或 client 裁剪窗口时暂停图片输出并回退字符；位置标记恢复时复用同一图片缓存。`allow-passthrough` 只写入本实例自建 pane，迁移时跟随 pane、退出时随 pane 回收。当前真实验收环境为 iTerm2 3.7.3／tmux 3.7c，需要终端保留图片位置标记及其真彩色 ID；不修改用户终端特性或全局配置。
 
@@ -27,6 +27,8 @@
 tmux 优先读取 pane 的 current path、current command、PID 等元数据，再对同一 TTY／进程子树补充识别。发现范围先排除自建侧栏，再读取进程树：附着 session 与本次曾附着 session 保留；其他 detached pane 只在当前进程树中存在非 shell 程序时保留（包括 Agent、前台程序与后台服务），不能仅凭 pane 的历史启动命令纳入。因此侧栏重启后仍能找到运行中的 detached Agent 与普通服务，又不会把全部遗留 shell 加回来。pane 的 cwd 不一定反映 Agent 内部切换的目录，无法确认时保留最近可信来源并标注。包装命令与 hook 可提供更强证据，但属于后续可选集成，不要求用户改变启动方式才能看到基础条目。
 
 ## Agent 与状态检测
+
+CodeBuddy 身份签名支持 `codebuddy`、`cbc` 与 `codebuddy-code`，沿用可执行文件名、包装进程路径参数、启动命令名的证据顺序；作为已识别 Agent 排序，显示名为 `CodeBuddy`，使用用户指定的绿色像素机器人 PNG 图标，图片不可用时回退 `B` 字符标识。命令依据为 [官方文档](https://www.codebuddy.ai/docs/cli/README) ，并核对本机 `@tencent-ai/codebuddy-code` 2.161.0 的 `package.json` 中 `bin` 声明及两个命令的软链接。状态仍为未知。
 
 身份与执行状态分别判断：识别出 Codex 不代表知道它是否正在执行。身份优先用可信启动元数据和进程可执行文件／参数，屏幕特征作为补充；node、python、shell 包装不能单靠进程名定性。
 

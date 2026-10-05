@@ -76,6 +76,26 @@ def run_discover(
 
 
 class IdentifyTests(unittest.TestCase):
+    def test_codebuddy_commands_and_node_wrapper(self):
+        for name in ("codebuddy", "cbc", "codebuddy-code"):
+            with self.subTest(name=name):
+                for command, tree, expected in (
+                    ("", [make_proc(100, 1, f"/usr/local/bin/{name}")], discovery.CONFIDENCE_HIGH),
+                    ("", [make_proc(100, 1, "node", f"/opt/npm/bin/{name}")], discovery.CONFIDENCE_MEDIUM),
+                    (f"FOO=1 {name} --resume", [], discovery.CONFIDENCE_MEDIUM),
+                ):
+                    signature, confidence, _ = discovery.identify(command, tree)
+                    self.assertIs(signature.kind, AgentKind.CODEBUDDY)
+                    self.assertEqual(signature.display_name, "CodeBuddy")
+                    self.assertEqual(signature.marker, "B")
+                    self.assertEqual(confidence, expected)
+
+    def test_codebuddy_text_and_similar_names_are_not_agents(self):
+        for argv in (("grep", "codebuddy", "file"), ("echo", "cbc"), ("codebuddy-helper",)):
+            with self.subTest(argv=argv):
+                signature, _, _ = discovery.identify(" ".join(argv), [make_proc(100, 1, *argv)])
+                self.assertIsNone(signature)
+
     def test_process_executable_is_strongest_evidence(self):
         tree = [make_proc(100, 1, "/Users/mac/.local/bin/claude")]
         signature, confidence, _ = discovery.identify("", tree)
@@ -113,6 +133,16 @@ class IdentifyTests(unittest.TestCase):
 
 
 class DiscoverTests(unittest.TestCase):
+    def test_detached_codebuddy_is_found_and_disappears_after_exit(self):
+        pane = make_pane(pid=100, attached=0)
+        shell = make_proc(100, 1, "zsh")
+        procs = {100: shell, 101: make_proc(101, 100, "node", "/usr/local/lib/node_modules/@tencent-ai/codebuddy-code/bin/codebuddy")}
+        sessions = run_discover([pane], procs, only_attached=True, keep_sessions=set())
+        self.assertEqual(len(sessions), 1)
+        self.assertIs(sessions[0].agent, AgentKind.CODEBUDDY)
+        self.assertEqual(sessions[0].state, PaneState.UNKNOWN)
+        self.assertEqual(run_discover([pane], {100: shell}, only_attached=True), [])
+
     def test_plain_shell_listed_as_shell_kind(self):
         panes = [make_pane("%0", cmd="zsh", pid=100)]
         procs = {100: make_proc(100, 1, "-zsh")}

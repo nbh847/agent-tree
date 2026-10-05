@@ -25,6 +25,7 @@ from .model import (
 _AGENT_RANK = {
     AgentKind.CLAUDE_CODE: 0,
     AgentKind.CODEX: 0,
+    AgentKind.CODEBUDDY: 0,
     AgentKind.UNKNOWN: 1,
     AgentKind.SHELL: 2,
 }

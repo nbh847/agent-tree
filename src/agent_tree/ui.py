@@ -157,7 +157,8 @@ def session_line(row: Row, selected: bool, width: int, *, image_icons: bool = Fa
         name.truncate(column - ICON_COLUMN - 1, overflow="ellipsis")
     line.append_text(name)
     if column is not None:
-        marker = (" " * ICON_WIDTH if image_icons and session.agent != AgentKind.UNKNOWN
+        marker = (" " * ICON_WIDTH if image_icons and session.agent in (
+            AgentKind.CODEX, AgentKind.CLAUDE_CODE, AgentKind.CODEBUDDY, AgentKind.SHELL)
                   else session.marker.ljust(ICON_WIDTH))
         line.append(" ", style=DIM)
         if image_id is not None:
@@ -231,9 +232,9 @@ class SidebarApp(App):
         self.image_origin = image_origin
         self._image_origin: tuple[int, int, str] | None = None
         self._last_text: dict[str, Text] = {}
-        first_id = secrets.randbelow(0xFFFFFD) + 1
+        first_id = secrets.randbelow(0xFFFFFC) + 1
         self._image_ids = {kind: first_id + index for index, kind in enumerate(
-            (AgentKind.CODEX, AgentKind.CLAUDE_CODE, AgentKind.SHELL))}
+            (AgentKind.CODEX, AgentKind.CLAUDE_CODE, AgentKind.CODEBUDDY, AgentKind.SHELL))}
         self._uploaded_images: set[AgentKind] = set()
 
     # ---- 布局 ----

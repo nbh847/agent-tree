@@ -10,7 +10,7 @@ from agent_tree.model import AgentKind
 
 class IconTests(unittest.TestCase):
     def test_assets_are_small_png_thumbnails(self):
-        for kind in (AgentKind.CODEX, AgentKind.CLAUDE_CODE, AgentKind.SHELL):
+        for kind in (AgentKind.CODEX, AgentKind.CLAUDE_CODE, AgentKind.CODEBUDDY, AgentKind.SHELL):
             data = base64.b64decode(payload(kind), validate=True)
             self.assertEqual(data[:8], b"\x89PNG\r\n\x1a\n")
             self.assertEqual(struct.unpack(">II", data[16:24]), (32, 48))
@@ -26,6 +26,7 @@ class IconTests(unittest.TestCase):
         self.assertNotIn("\x1b\x1b[", sequence)
 
     def test_unknown_and_invalid_ids_do_not_emit_images(self):
+        self.assertIn(payload(AgentKind.CODEBUDDY), image_sequence(AgentKind.CODEBUDDY, 42))
         self.assertEqual(image_sequence(AgentKind.UNKNOWN, 42), "")
         for image_id in (-1, 0, 0x1000000):
             self.assertEqual(image_sequence(AgentKind.SHELL, image_id), "")

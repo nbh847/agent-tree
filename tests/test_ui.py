@@ -71,7 +71,10 @@ def sample_rows():
 @unittest.skipUnless(HAVE_TEXTUAL, "需要安装 textual")
 class CurrentPaneUITests(unittest.IsolatedAsyncioTestCase):
     async def test_selected_image_row_background_covers_all_three_full_width_lines(self):
-        model = tui.SidebarModel(lambda: build_tree([make_session(), make_session("%1")]))
+        model = tui.SidebarModel(lambda: build_tree([
+            make_session(agent=AgentKind.CODEBUDDY, display="CodeBuddy", marker="B"),
+            make_session("%1"),
+        ]))
         app = ui.SidebarApp(model, image_origin=lambda: (0, 0, "@0"))
         async with app.run_test(size=(40, 16)) as pilot:
             await pilot.pause()
@@ -114,7 +117,7 @@ class CurrentPaneUITests(unittest.IsolatedAsyncioTestCase):
                 display(screen, frame)
 
             write_images()
-            self.assertEqual(driver.write.call_count, 3)
+            self.assertEqual(driver.write.call_count, 4)
             driver.reset_mock()
             with patch.object(app, "_paint_images", side_effect=write_images), patch.object(
                 app, "_display", side_effect=record
@@ -162,9 +165,9 @@ class CurrentPaneUITests(unittest.IsolatedAsyncioTestCase):
                 with patch.object(ui.App, "_display", side_effect=lambda *args: driver.write("TEXT_FRAME")):
                     app._display(app.screen, frame)
                     writes = [call.args[0] for call in driver.write.call_args_list]
-                    self.assertEqual(len(writes), 4)
-                    self.assertTrue(all("a=t,f=100" in write for write in writes[:3]))
-                    self.assertEqual(writes[3], "TEXT_FRAME")
+                    self.assertEqual(len(writes), 5)
+                    self.assertTrue(all("a=t,f=100" in write for write in writes[:4]))
+                    self.assertEqual(writes[4], "TEXT_FRAME")
                     driver.reset_mock()
                     app._display(app.screen, frame)
                     self.assertEqual([call.args[0] for call in driver.write.call_args_list], ["TEXT_FRAME"])
@@ -211,16 +214,16 @@ class CurrentPaneUITests(unittest.IsolatedAsyncioTestCase):
             driver = Mock()
             with patch.object(app, "_driver", driver), patch.object(ui.SidebarApp, "is_headless", new_callable=PropertyMock, return_value=False):
                 app._paint_images()
-                self.assertEqual(driver.write.call_count, 3)
+                self.assertEqual(driver.write.call_count, 4)
                 app._paint_images()
                 app._image_origin = (0, 1, "@0")
                 app._paint_images()
                 app._image_origin = (0, 1, "@1")
                 app._paint_images()
-                self.assertEqual(driver.write.call_count, 3)
+                self.assertEqual(driver.write.call_count, 4)
                 driver.reset_mock()
                 app._release_images()
-                self.assertEqual(driver.write.call_count, 3)
+                self.assertEqual(driver.write.call_count, 4)
                 for call in driver.write.call_args_list:
                     self.assertIn("a=d,d=I,i=", call.args[0])
                 self.assertEqual(app._uploaded_images, set())
@@ -346,6 +349,24 @@ class CurrentPaneUITests(unittest.IsolatedAsyncioTestCase):
 
 @unittest.skipUnless(HAVE_TEXTUAL, "需要安装 textual")
 class RowRenderTests(unittest.TestCase):
+    def test_codebuddy_image_and_character_fallback(self):
+        rows = tui.visible_rows(build_tree([make_session(agent=AgentKind.CODEBUDDY,
+                                                  display="CodeBuddy", marker="B")]), set())
+        line = ui.session_line(rows[1], False, 30)
+        self.assertIn("CodeBuddy", line.plain)
+        self.assertIn(" B", line.plain)
+        self.assertNotIn(PLACEHOLDER, line.plain)
+        image = ui.session_line(rows[1], False, 30, image_icons=True, image_id=42)
+        self.assertEqual(image.plain.count(PLACEHOLDER), 4)
+        self.assertIn("CodeBuddy", image.plain)
+
+    def test_four_image_ids_stay_within_protocol_limit(self):
+        with patch.object(ui.secrets, "randbelow", side_effect=lambda limit: limit - 1):
+            app = ui.SidebarApp(tui.SidebarModel(lambda: build_tree([])))
+        self.assertIn(AgentKind.CODEBUDDY, app._image_ids)
+        self.assertEqual(len(set(app._image_ids.values())), 4)
+        self.assertEqual(max(app._image_ids.values()), 0xFFFFFF)
+
     def test_image_placeholder_is_four_cells_and_keeps_id_color_when_selected(self):
         row = sample_rows()[1]
         image_id = 0x123456

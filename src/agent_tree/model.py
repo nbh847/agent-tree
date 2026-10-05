@@ -15,6 +15,7 @@ class AgentKind(str, Enum):
 
     CLAUDE_CODE = "claude_code"
     CODEX = "codex"
+    CODEBUDDY = "codebuddy"
     SHELL = "shell"
     UNKNOWN = "unknown"
 

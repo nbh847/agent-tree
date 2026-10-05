@@ -50,6 +50,7 @@ class AgentSignature:
 AGENT_SIGNATURES: tuple[AgentSignature, ...] = (
     AgentSignature(AgentKind.CLAUDE_CODE, "Claude Code", "C", frozenset({"claude", "claude-code"})),
     AgentSignature(AgentKind.CODEX, "Codex", "O", frozenset({"codex"})),
+    AgentSignature(AgentKind.CODEBUDDY, "CodeBuddy", "B", frozenset({"codebuddy", "cbc", "codebuddy-code"})),
 )
 
 UNKNOWN_DISPLAY_NAME = "未知"
