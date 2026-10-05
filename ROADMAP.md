@@ -32,6 +32,8 @@
 
 ## 最近完成
 
+- 2026-10-05 08:39：提交 detached Agent 修复，并合并远程独立初始化历史；README 保留当前完整项目说明，远程 MIT LICENSE 原文纳入，双方历史保留，采用正常推送。
+
 - 2026-10-05 08:32：修复 detached Codex／Claude Code 被附着过滤隐藏的问题。发现时先检查当前进程树，存活 Agent 即使 detached、且本次 keep_sessions 为空也显示；普通遗留 shell 与仅有历史 Agent 启动命令的 pane 不自动纳入。172 项完整回归通过，默认 server 只读快照中 agent-tree 同时列出 Codex %0 与 %4。
 
 - 2026-10-05 08:24：将当前文档、源码、启动脚本和测试纳入首次 Git 基线提交，为独立 worktree 开发提供起点；忽略本地虚拟环境、临时产物与真实环境配置，不推送远程。
@@ -70,11 +72,9 @@
 
 - 2026-10-04 14:08：完成 Goal 1 检查点 1 宿主可行性验证，45 项检查全部通过；确定技术栈为 Python 3.14 + 标准库，侧栏保持方式为迁移单个自建侧栏；新增 [验证记录](/Users/mac/workspace/agent-tree/docs/validation.md) 并同步架构决策。
 
-- 2026-10-04 13:34：初始化本地 Git 仓库并关联 `origin` 至 `git@github.com:nbh847/agent-tree.git`；本地分支已改为远程使用的 `master`，无本地 `main` 分支，尚未提交或推送。
-
 ## 最近验证
 
-- 2026-10-05 08:39：提交前完整回归 172 项全部通过，无跳过；`git diff --check` 与受影响文档本地链接检查通过。已核对远程 master 仅含独立初始化 README 与 MIT LICENSE，准备保留两侧历史后正常推送。
+- 2026-10-05 08:39：提交前完整回归 172 项全部通过，无跳过；`git diff --check` 与受影响文档本地链接检查通过。已核对远程 master 仅含独立初始化 README 与 MIT LICENSE，合并后保留两侧历史与远程 LICENSE，README 冲突按当前完整说明解决，源码与测试未改变。
 
 - 2026-10-05 08:32：完整回归 `AGENT_TREE_RUN_TMUX_TESTS=1 PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -t tests`：172 项全部通过；离线执行 172 项、9 项集成跳过。新增重启时 detached Agent 保留、包装启动识别、普通 shell／未知程序／缺失进程／历史启动命令过滤、Agent 退出与关闭后移除的单元和隔离 tmux 验证。`bin/agent-tree --snapshot` 只读默认 server，agent-tree 组包含 %0 与 %4 两个 Codex。
 
