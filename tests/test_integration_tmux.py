@@ -68,6 +68,21 @@ class DiscoveryIntegrationTests(unittest.TestCase):
     def _tree(self):
         return build_tree(discover(self.tmux, self.tmux.server_key()))
 
+    def test_current_screen_excludes_history_and_copy_mode(self):
+        self.tmux.run("new-session", "-d", "-s", "screen", "-x", "100", "-y", "24",
+                      "sh", "-c", "printf 'OLD_STATUS\\n'; seq 1 60; printf 'CURRENT_STATUS\\n'; sleep 900")
+        pane = self.tmux.snapshot()[0].pane_id
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            screen = self.tmux.screen(pane)
+            if screen and "CURRENT_STATUS" in screen:
+                break
+            time.sleep(0.05)
+        self.assertIn("CURRENT_STATUS", screen)
+        self.assertNotIn("OLD_STATUS", screen)
+        self.tmux.run("copy-mode", "-t", pane)
+        self.assertIsNone(self.tmux.screen(pane))
+
     def test_finds_agent_keeps_shell_and_excludes_self_owned_pane(self) -> None:
         # 用独立 session 规避 base-index 造成的 window 索引冲突，并顺带覆盖跨 session 发现
         self.tmux.run(
@@ -90,7 +105,7 @@ class DiscoveryIntegrationTests(unittest.TestCase):
         (session,) = by_key[os.path.realpath(self.proj)].sessions
         self.assertEqual(session.display_name, "Codex")
         self.assertEqual(session.marker, "O")
-        self.assertEqual(session.state_source, "not-implemented")
+        self.assertEqual(session.state_source, "screen:no-matching-signal")
         self.assertEqual(session.generation, 0)
         self.assertEqual(session.session_name, "agent")
 

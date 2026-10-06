@@ -2,7 +2,9 @@
 
 ## 集成决策
 
-已确定采用「tmux CLI → 会话快照 → 目录聚合与检测 → TUI 侧栏」结构。观察面只读取 pane 信息；操作面仅定位已有 pane，生命周期管理只涉及自建侧栏 pane。tmux 拥有用户终端与 Agent 生命周期。
+侧栏导航将 `join-pane -d`、`switch-client`／`select-window` 与最终 `select-pane` 通过独立的 `;` 参数一次提交，减少逐次启动 tmux 子进程之间的中间画面；不承诺消除尺寸变化引起的程序重绘。侧栏独占原窗口时仍先切 client，避免销毁空窗口时断开终端。命令序列遇错停止；若前置切 client 已成功，保留退出恢复记录。原生切窗的轮询跟随保持不变。
+
+已确定采用「tmux CLI → 会话快照 → 目录聚合与检测 → TUI 侧栏」结构。观察面读取 pane 元数据与 Agent 当前屏幕输入区；操作面仅定位已有 pane，生命周期管理只涉及自建侧栏 pane。tmux 拥有用户终端与 Agent 生命周期。
 
 侧栏放在当前 window 左侧专用 pane 中，观察同一 server／socket 内各 session、window 的 Agent pane，并排除所有 agent-tree 自建 pane。iTerm2 等终端仅承载 tmux，不使用其原生 API、Toolbelt 或网页服务。
 
@@ -28,11 +30,15 @@ tmux 优先读取 pane 的 current path、current command、PID 等元数据，�
 
 ## Agent 与状态检测
 
-CodeBuddy 身份签名支持 `codebuddy`、`cbc` 与 `codebuddy-code`，沿用可执行文件名、包装进程路径参数、启动命令名的证据顺序；作为已识别 Agent 排序，显示名为 `CodeBuddy`，使用用户指定的绿色像素机器人 PNG 图标，图片不可用时回退 `B` 字符标识。命令依据为 [官方文档](https://www.codebuddy.ai/docs/cli/README) ，并核对本机 `@tencent-ai/codebuddy-code` 2.161.0 的 `package.json` 中 `bin` 声明及两个命令的软链接。状态仍为未知。
+CodeBuddy 身份签名支持 `codebuddy`、`cbc` 与 `codebuddy-code`，沿用可执行文件名、包装进程路径参数、启动命令名的证据顺序；作为已识别 Agent 排序，显示名为 `CodeBuddy`，使用用户指定的绿色像素机器人 PNG 图标，图片不可用时回退 `B` 字符标识。命令依据为 [官方文档](https://www.codebuddy.ai/docs/cli/README) ，并核对本机 `@tencent-ai/codebuddy-code` 2.161.0 的 `package.json` 中 `bin` 声明及两个命令的软链接。状态按当前屏幕输入区匹配，未匹配时为未知。
 
-Pi 显示名为 `Pi`，支持 `pi` 可执行文件与启动命令，以及 Node／Bun 包装的 `@mariozechner/pi-coding-agent`、`@earendil-works/pi-coding-agent` 下 `dist/cli.js`／`dist/bundle/cli.js` 明确入口；普通 `cli.js` 和同名文本不匹配。入口依据为 [官方包声明](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/package.json) ，本机 1.0.3 的命令软链接指向后者的 `dist/bundle/cli.js`。作为已识别 Agent 排序，使用官网 PNG 缩略图，字符回退为 `P`，执行状态仍为未知。
+Pi 显示名为 `Pi`，支持 `pi` 可执行文件与启动命令，以及 Node／Bun 包装的 `@mariozechner/pi-coding-agent`、`@earendil-works/pi-coding-agent` 下 `dist/cli.js`／`dist/bundle/cli.js` 明确入口；普通 `cli.js` 和同名文本不匹配。入口依据为 [官方包声明](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/package.json) ，本机 1.0.3 的命令软链接指向后者的 `dist/bundle/cli.js`。作为已识别 Agent 排序，使用官网 PNG 缩略图，字符回退为 `P`，执行状态只匹配明确带中断／取消提示的运行指示，其余为未知。
 
 身份与执行状态分别判断：识别出 Codex 不代表知道它是否正在执行。身份优先用可信启动元数据和进程可执行文件／参数，屏幕特征作为补充；node、python、shell 包装不能单靠进程名定性。
+
+当前由 `states.py` 匹配 tmux 当前屏幕底部 12 行，并在发现最新输入提示符时进一步限制到其前 3 行及输入区；不读取 scrollback。只采样进程树中仍有已识别 Agent 的 pane，历史启动命令不足以触发采样。复制模式或 capture 失败立即回退未知，每次刷新独立判断，不保留上一轮状态，不产生乱序事件。屏幕文本只留在本次调用内存中。
+
+Codex 根据带计时的执行指示、选择框和 composer 底栏匹配；执行指示与确认框优先于空闲输入框。依据为 [官方运行指示源码](https://github.com/openai/codex/blob/main/codex-rs/tui/src/status_indicator_widget.rs) 与 [官方授权框源码](https://github.com/openai/codex/blob/main/codex-rs/tui/src/bottom_pane/approval_overlay.rs) ，并核对本机输入区。Claude Code 匹配执行 spinner 和带上下边框的输入框；CodeBuddy 核对本机 2.161.0 的 `dist/codebuddy.js` 中中断计时、授权选项与输入区实现，沿用对应匹配。Pi 核对本机 1.0.3 的 `status-indicator.js` 与 `interactive-mode.js`，只接受带中断／取消提示的运行指示；默认 Working 文案可被扩展改写，缺少明确提示时保持未知。带数字选项和确认／取消按键的当前选择框显示待操作；普通回答中的问句不算。
 
 状态证据建议顺序为已验证的结构化事件、活跃界面或 OSC 信号、低可信启发式。事件必须关联目标会话并处理乱序、过期和退出；屏幕检测限制到当前可变区域，避开历史记录与 transcript viewer。无输出或进程存活只能作为观察事实。
 
@@ -43,7 +49,7 @@ Pi 显示名为 `Pi`，支持 `pi` 可执行文件与启动命令，以及 Node�
 | `blocked` | 当前等待输入或授权的事件／实时交互框 | 不从历史文案推断 |
 | `unknown` | 身份或状态证据不足、采样不可用 | 显示「状态未知」 |
 
-`stale` 是数据新鲜度标记，不是执行状态。错误／完成提示只在有明确事件时追加，不把任意进程退出认作任务成功。状态短时抖动使用有限延迟确认；具体时间与刷新频率通过原型测试确定。
+`stale` 是数据新鲜度标记，不是执行状态。错误／完成提示只在有明确事件时追加，不把任意进程退出认作任务成功。界面用独立的 0.6 秒定时器切换进行中蓝点的明暗，其他状态静止；定时器只重绘可见行，不重新扫描、不导航、不重新上传 PNG。当前每 2 秒重新采样，暂不做延迟确认；CLI 局部重绘时可能短暂回退未知。屏幕规则属于界面观察，不能排除冻结画面、特殊主题、窄屏裁剪及正文模拟界面的误判，不等同于结构化执行事件。
 
 ## 运行与安全边界
 

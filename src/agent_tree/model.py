@@ -24,11 +24,13 @@ class AgentKind(str, Enum):
 class PaneState(str, Enum):
     """执行状态。
 
-    本阶段只提供 ``UNKNOWN``：进程存活、输出活动或静默都不能作为执行证据，
-    因此不区分执行中、空闲与等待确认。
+    空闲表示当前可接收输入，不承诺任务成功完成。
     """
 
     UNKNOWN = "unknown"
+    WORKING = "working"
+    IDLE = "idle"
+    BLOCKED = "blocked"
 
 
 @dataclass(frozen=True)

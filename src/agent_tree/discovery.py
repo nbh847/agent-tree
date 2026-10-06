@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from . import processes
 from .model import AgentKind, AgentSession, PaneState
 from .tmux import PaneInfo, Tmux
+from .states import detect_state
 
 #: 普通 shell 名称。这些进程不作为 Agent 展示。
 SHELL_NAMES = frozenset(
@@ -33,8 +34,8 @@ SHELL_NAMES = frozenset(
     }
 )
 
-#: ``state_source`` 取值：本阶段不实现状态识别。
-STATE_SOURCE_NONE = "not-implemented"
+#: 没有可用采样接口时的降级来源。
+STATE_SOURCE_NONE = "screen-unavailable"
 
 
 @dataclass(frozen=True)
@@ -198,6 +199,11 @@ def discover(
             agent, display_name, marker = AgentKind.UNKNOWN, UNKNOWN_DISPLAY_NAME, UNKNOWN_MARKER
 
         cwd = pane.pane_current_path or None
+        state, state_source = PaneState.UNKNOWN, STATE_SOURCE_NONE
+        # 历史启动命令仅用于身份，不足以证明当前仍是该 Agent 的界面。
+        live_signature, _, _ = identify("", procs_in_tree)
+        if live_signature is not None and hasattr(tmux, "screen"):
+            state, state_source = detect_state(agent, tmux.screen(pane.pane_id))
         sessions.append(
             AgentSession(
                 session_key=f"{host_key}#{pane.pane_id}",
@@ -211,8 +217,8 @@ def discover(
                 agent=agent,
                 display_name=display_name,
                 marker=marker,
-                state=PaneState.UNKNOWN,
-                state_source=STATE_SOURCE_NONE,
+                state=state,
+                state_source=state_source,
                 confidence=confidence,
                 observed_at=observed_at,
                 generation=generation,

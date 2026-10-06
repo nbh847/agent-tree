@@ -379,29 +379,39 @@ class SidebarManager:
         client = self.initiating_client()
         location = self.location_of(self.pane_id)
 
+        commands: list[tuple[str, ...]] = []
+        switching = client is not None and client.session_name != target_session
+        switch = ("switch-client", "-c", client.name, "-t", window) if switching else None
         if location is not None and location.window != window:
-            try:
-                if (
-                    client is not None
-                    and client.session_name != target_session
-                    and self._alone_in_window(location)
-                ):
-                    self._switch_client(client, target_session, window)
-                    client = None
-                self.tmux.run(
-                    "join-pane", "-b", "-h", "-s", self.pane_id, "-t", window, "-l", self.width
-                )
-            except TmuxCommandError as exc:
-                raise SidebarError(f"迁移侧栏失败：{exc}") from exc
-
-        if client is not None and client.session_name != target_session:
-            self._switch_client(client, target_session, window)
+            if switch is not None and self._alone_in_window(location):
+                commands.append(switch)  # 先带走 client，避免空窗口销毁导致断开。
+            commands.append((
+                "join-pane", "-d", "-b", "-h", "-s", self.pane_id,
+                "-t", window, "-l", self.width,
+            ))
+        if switch is not None:
+            if switch not in commands:
+                commands.append(switch)
         else:
-            # 同一 session 内换 window：让所在 session 的当前 window 跟过去。
-            self.tmux.run("select-window", "-t", window, check=False)
-
+            commands.append(("select-window", "-t", window))
         focus = target_pane if focus_target else self.pane_id
-        self.tmux.run("select-pane", "-t", focus, check=False)
+        commands.append(("select-pane", "-t", focus))
+        # 一次提交到同一命令队列，避免每个子进程之间呈现迁移／切窗中间帧。
+        args: list[str] = []
+        for command in commands:
+            if args:
+                args.append(";")
+            args.extend(command)
+        try:
+            self.tmux.run(*args)
+        except TmuxCommandError as exc:
+            # 队列遇错停止；独占窗口时前置 switch 可能已经成功。
+            if switching and any(c.name == client.name and c.session_name == target_session
+                                 for c in list_clients(self.tmux)):
+                self._remember_client(client, target_session)
+            raise SidebarError(f"导航失败：{exc}") from exc
+        if switching:
+            self._remember_client(client, target_session)
         self.last_target = target_pane
 
     def _alone_in_window(self, location: Location) -> bool:
@@ -411,9 +421,8 @@ class SidebarManager:
         )
         return completed.returncode == 0 and completed.stdout.split() == [self.pane_id]
 
-    def _switch_client(self, client: ClientContext, target_session: str, window: str) -> None:
-        """把发起 client 切到目标视图，并记录「借用」以便退出时送回原 session。"""
-        self.tmux.run("switch-client", "-c", client.name, "-t", window, check=False)
+    def _remember_client(self, client: ClientContext, target_session: str) -> None:
+        """记录成功切换的 client，以便退出时送回原 session。"""
         if self._borrowed_client is not None and self._borrowed_client[0] == client.name:
             origin = self._borrowed_client[1]
         else:

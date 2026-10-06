@@ -1,7 +1,7 @@
 """tmux 访问层。
 
 全部调用使用参数数组，不拼接字符串执行；字段以 ``\\x1f`` 分隔，避免路径含空格或
-非 ASCII 被截断。只读取 pane 元数据与 pane 级用户选项，不读取屏幕内容。
+非 ASCII 被截断。状态采样只读取当前屏幕，不读取滚动历史。
 """
 
 from __future__ import annotations
@@ -157,6 +157,15 @@ class Tmux:
             pane = _parse_pane(line)
             seen.setdefault(pane.pane_id, pane)
         return tuple(seen.values())
+
+    def screen(self, pane_id: str) -> str | None:
+        """只读当前屏幕；复制／历史查看模式和消失的 pane 不提供状态证据。"""
+        mode = self.run("display-message", "-p", "-t", pane_id,
+                        "#{pane_in_mode}", check=False)
+        if mode.returncode or mode.stdout.strip() != "0":
+            return None
+        result = self.run("capture-pane", "-p", "-t", pane_id, check=False)
+        return result.stdout if result.returncode == 0 else None
 
 
 def _parse_pane(line: str) -> PaneInfo:

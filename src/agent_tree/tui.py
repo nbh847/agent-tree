@@ -37,10 +37,9 @@ class Row:
 
 
 def state_text(session: AgentSession) -> str:
-    """执行状态的显示文本。本阶段只有「状态未知」。"""
-    if session.state is PaneState.UNKNOWN:
-        return STATE_UNKNOWN_TEXT
-    return STATE_UNKNOWN_TEXT
+    """空闲与任务成功完成分别表述。"""
+    return {PaneState.WORKING: "进行中", PaneState.IDLE: "空闲／本轮结束",
+            PaneState.BLOCKED: "等待操作"}.get(session.state, STATE_UNKNOWN_TEXT)
 
 
 def visible_rows(tree: Tree, collapsed: set[str]) -> list[Row]:

@@ -24,7 +24,7 @@ from textual.reactive import Reactive
 from textual.widgets import Static
 
 from .icons import ICON_COLUMN, ICON_HEIGHT, ICON_WIDTH, delete_sequence, image_sequence, placeholder_row
-from .model import AgentKind
+from .model import AgentKind, PaneState
 from .tui import (
     COLLAPSED_MARK,
     EXPANDED_MARK,
@@ -137,15 +137,16 @@ def group_line(row: Row, collapsed: set[str], selected: bool, width: int, *, can
 
 def session_icon_column(row: Row, width: int) -> int | None:
     """图标紧随可见名称，窄栏为名称保留至少三列。"""
-    if width < ICON_COLUMN + ICON_WIDTH + 4:
+    status_width = 2 if row.session.agent not in {AgentKind.SHELL, AgentKind.UNKNOWN} else 0
+    if width < ICON_COLUMN + ICON_WIDTH + 4 + status_width:
         return None
     name = Text(row.session.display_name)
-    name.truncate(width - ICON_COLUMN - ICON_WIDTH - 1, overflow="ellipsis")
+    name.truncate(width - ICON_COLUMN - ICON_WIDTH - 1 - status_width, overflow="ellipsis")
     return ICON_COLUMN + cell_len(name.plain) + 1
 
 
 def session_line(row: Row, selected: bool, width: int, *, image_icons: bool = False,
-                 image_id: int | None = None) -> Text:
+                 image_id: int | None = None, working_bright: bool = True) -> Text:
     """会话行：连接线 + 名称 + 右侧图标／字符标识。"""
     session = row.session
     assert session is not None
@@ -165,6 +166,13 @@ def session_line(row: Row, selected: bool, width: int, *, image_icons: bool = Fa
             line.append(placeholder_row(image_id, 1), style=f"#{image_id:06x} on {BG}")
         else:
             line.append(marker, style=DIM)
+        if session.agent not in {AgentKind.SHELL, AgentKind.UNKNOWN}:
+            color = {PaneState.WORKING: SELECT_ACCENT, PaneState.BLOCKED: "#e3b341",
+                     PaneState.IDLE: ACCENT, PaneState.UNKNOWN: DIM}[session.state]
+            if session.state is PaneState.WORKING and not working_bright:
+                color = "#405675"
+            line.append(" ", style=DIM)
+            line.append("●", style=color)
     _pad(line, "", width)
     return _highlight(line, selected, width)
 
@@ -173,7 +181,7 @@ def session_spacer(row: Row, width: int, image_id: int | None, canvas_row: int, 
     line = Text("   " if canvas_row == 2 and row.last else "  │", style=FAINT)
     column = session_icon_column(row, width)
     if image_id is not None and column is not None:
-        line.append(" " * (column - 3))
+        line.append(" " * max(0, column - cell_len(line.plain)))
         line.append(placeholder_row(image_id, canvas_row), style=f"#{image_id:06x} on {BG}")
     _pad(line, "", width)
     return _highlight(line, selected, width)
@@ -236,6 +244,7 @@ class SidebarApp(App):
         self._image_ids = {kind: first_id + index for index, kind in enumerate(
             (AgentKind.CODEX, AgentKind.CLAUDE_CODE, AgentKind.CODEBUDDY, AgentKind.PI, AgentKind.SHELL))}
         self._uploaded_images: set[AgentKind] = set()
+        self._working_bright = True
 
     # ---- 布局 ----
 
@@ -261,6 +270,14 @@ class SidebarApp(App):
         self._paint()
         self.set_interval(self.model.refresh_seconds, self._tick)
         self.set_interval(0.25, self._sync_host)
+        self.set_interval(0.6, self._pulse_working)
+
+    def _pulse_working(self) -> None:
+        """仅运行中的状态点闪动；不触发发现、导航或图片上传。"""
+        if any(row.session is not None and row.session.state is PaneState.WORKING
+               for row in self.model.rows()):
+            self._working_bright = not self._working_bright
+            self._paint_body()
 
     def on_resize(self, event: events.Resize) -> None:
         self._viewport_width = event.size.width
@@ -370,7 +387,8 @@ class SidebarApp(App):
                     body.append("\n")
                     self._line_rows.append(index if self._image_origin is not None else None)
                     line = session_line(row, index == self.model.selected, width,
-                                        image_icons=self._image_origin is not None, image_id=image_id)
+                                        image_icons=self._image_origin is not None, image_id=image_id,
+                                        working_bright=self._working_bright)
                 body.append_text(line)
                 body.append("\n")
                 self._line_rows.append(index)

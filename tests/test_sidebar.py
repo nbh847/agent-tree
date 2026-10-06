@@ -24,6 +24,7 @@ class FakeTmux:
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, ...]] = []
+        self.queues: list[tuple[str, ...]] = []
         self.width = "120"
         self.panes: dict[str, str] = {}
         self.locations: dict[str, tuple[str, int]] = {}
@@ -42,6 +43,15 @@ class FakeTmux:
         return [call for call in self.calls if call and call[0] == command]
 
     def run(self, *args: str, check: bool = True) -> subprocess.CompletedProcess:
+        if ";" in args:
+            self.queues.append(args)
+            start = 0
+            for end in [i for i, arg in enumerate(args) if arg == ";"] + [len(args)]:
+                result = self.run(*args[start:end], check=check)
+                if result.returncode:
+                    return result
+                start = end + 1
+            return result
         self.calls.append(args)
         stdout, code = self._respond(args)
         if check and code != 0:
@@ -358,6 +368,12 @@ class NavigateTests(unittest.TestCase):
 
     def test_navigation_migrates_sidebar_and_keeps_focus(self):
         self.manager.navigate("s1", 1, "%2")
+        self.assertEqual(len(self.tmux.queues), 1)
+        self.assertEqual(self.tmux.queues[0], (
+            "join-pane", "-d", "-b", "-h", "-s", "%9", "-t", "s1:1", "-l", "24%",
+            ";", "switch-client", "-c", "client-1", "-t", "s1:1",
+            ";", "select-pane", "-t", "%9",
+        ))
         self.assertEqual(len(self.tmux.called("join-pane")), 1)
         self.assertEqual(len(self.tmux.called("switch-client")), 1)
         selects = self.tmux.called("select-pane")
@@ -386,6 +402,32 @@ class NavigateTests(unittest.TestCase):
         with self.assertRaises(SidebarError):
             self.manager.navigate("s1", 1, "%404")
         self.assertEqual(self.tmux.called("join-pane"), [])
+
+    def test_failed_migration_stops_before_switch_and_focus(self):
+        original = self.tmux._respond
+        self.tmux._respond = lambda args: ("", 1) if args[0] == "join-pane" else original(args)
+        with self.assertRaises(SidebarError):
+            self.manager.navigate("s1", 1, "%2")
+        self.assertEqual(self.tmux.called("switch-client"), [])
+        self.assertEqual(self.tmux.called("select-pane"), [])
+        self.assertIsNone(self.manager._borrowed_client)
+
+    def test_alone_failed_migration_remembers_switched_client(self):
+        self.tmux.window_panes = {"s0:1": ["%9"]}
+        original = self.tmux._respond
+
+        def respond(args):
+            if args[0] == "switch-client":
+                self.tmux.clients = [("client-1", "s1", 1, "%2", 100)]
+            if args[0] == "join-pane":
+                return "", 1
+            return original(args)
+
+        self.tmux._respond = respond
+        with self.assertRaises(SidebarError):
+            self.manager.navigate("s1", 1, "%2")
+        self.assertEqual(self.tmux.called("select-pane"), [])
+        self.assertEqual(self.manager._borrowed_client, ("client-1", "s0", "s1"))
 
     def test_alone_sidebar_switches_client_before_migrating(self):
         # 侧栏独占原 window 时先切 client 再 join：若先 join，原 window 因没有

@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import unittest
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import Mock, PropertyMock, patch
 
@@ -70,6 +71,60 @@ def sample_rows():
 
 @unittest.skipUnless(HAVE_TEXTUAL, "需要安装 textual")
 class CurrentPaneUITests(unittest.IsolatedAsyncioTestCase):
+    async def test_only_working_dot_pulses_without_navigation_or_reload(self):
+        session = replace(make_session(), state=PaneState.WORKING)
+        loader = Mock(side_effect=lambda: build_tree([session]))
+        model = tui.SidebarModel(loader)
+        app = ui.SidebarApp(model)
+        async with app.run_test(size=(30, 16)) as pilot:
+            await pilot.pause()
+            model.select(1)
+            calls = loader.call_count
+            before = app._working_bright
+            app._pulse_working()
+            self.assertNotEqual(app._working_bright, before)
+            self.assertEqual(loader.call_count, calls)
+            self.assertEqual(model.selected, 1)
+            row = model.rows()[1]
+            bright = ui.session_line(row, True, 30, working_bright=True)
+            dim = ui.session_line(row, True, 30, working_bright=False)
+            self.assertEqual(bright.plain, dim.plain)
+            self.assertNotEqual(bright.spans, dim.spans)
+            for state in (PaneState.IDLE, PaneState.BLOCKED, PaneState.UNKNOWN):
+                session = replace(session, state=state)
+                model.reload()
+                before = app._working_bright
+                app._pulse_working()
+                self.assertEqual(app._working_bright, before)
+                row = model.rows()[1]
+                self.assertEqual(ui.session_line(row, True, 30, working_bright=True),
+                                 ui.session_line(row, True, 30, working_bright=False))
+
+    async def test_state_refresh_keeps_selection_and_image_columns(self):
+        session = make_session()
+        model = tui.SidebarModel(lambda: build_tree([session]))
+        app = ui.SidebarApp(model, image_origin=lambda: (0, 0, "@0"))
+        async with app.run_test(size=(30, 16)) as pilot:
+            await pilot.pause()
+            model.select(1)
+            column = ui.session_icon_column(model.rows()[1], 30)
+            for state in (PaneState.WORKING, PaneState.BLOCKED, PaneState.IDLE, PaneState.UNKNOWN):
+                session = replace(session, state=state)
+                model.reload()
+                app._paint_body()
+                await pilot.pause()
+                self.assertEqual(model.selected, 1)
+                self.assertIn("●", app.query_one("#body").render().plain)
+                row = model.rows()[1]
+                line = ui.session_line(row, True, 30, image_id=123)
+                self.assertEqual(cell_len(line.plain.split("●")[0]), column + 5)
+                from rich.console import Console
+                color = {PaneState.WORKING: ui.SELECT_ACCENT, PaneState.BLOCKED: "#e3b341",
+                         PaneState.IDLE: ui.ACCENT, PaneState.UNKNOWN: ui.DIM}[state]
+                self.assertEqual(line.get_style_at_offset(Console(), line.plain.index("●")).color.triplet.hex, color)
+                self.assertNotIn("●", ui.session_spacer(row, 30, 123, 0).plain)
+                self.assertEqual(ui.session_icon_column(model.rows()[1], 30), column)
+
     async def test_selected_image_row_background_covers_all_three_full_width_lines(self):
         model = tui.SidebarModel(lambda: build_tree([
             make_session(agent=AgentKind.CODEBUDDY, display="CodeBuddy", marker="B"),
