@@ -38,8 +38,9 @@ def snapshot() -> dict[int, ProcInfo]:
             ["ps", "-axo", "pid=,ppid=,command="],
             capture_output=True,
             text=True,
+            timeout=2,
         )
-    except OSError:
+    except (OSError, subprocess.TimeoutExpired):
         return {}
     if completed.returncode != 0:
         return {}

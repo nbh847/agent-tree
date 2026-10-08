@@ -12,6 +12,8 @@ from __future__ import annotations
 import os
 import secrets
 import sys
+from queue import Empty, Queue
+from threading import Thread
 from typing import Callable
 
 from rich.cells import cell_len
@@ -25,6 +27,7 @@ from textual.widgets import Static
 
 from .icons import ICON_COLUMN, ICON_HEIGHT, ICON_WIDTH, delete_sequence, image_sequence, placeholder_row
 from .model import AgentKind, PaneState
+from .tmux import TmuxError
 from .tui import (
     COLLAPSED_MARK,
     EXPANDED_MARK,
@@ -245,6 +248,9 @@ class SidebarApp(App):
             (AgentKind.CODEX, AgentKind.CLAUDE_CODE, AgentKind.CODEBUDDY, AgentKind.PI, AgentKind.SHELL))}
         self._uploaded_images: set[AgentKind] = set()
         self._working_bright = True
+        self._scan_pending = False
+        self._scan_results = Queue()
+        self._quitting = False
 
     # ---- 布局 ----
 
@@ -263,17 +269,23 @@ class SidebarApp(App):
         # 先画出占位帧，再执行较慢的宿主检查与首次扫描。
         self._paint()
         if self.on_ready is not None:
-            self.on_ready()
-        self.model.reload()
+            try:
+                self.on_ready()
+            except TmuxError as exc:
+                self.model.message = str(exc)
+        self._tick()
         if self.image_origin is not None:
-            self._image_origin = self.image_origin()
+            self._image_origin = self._read_image_origin()
         self._paint()
         self.set_interval(self.model.refresh_seconds, self._tick)
         self.set_interval(0.25, self._sync_host)
         self.set_interval(0.6, self._pulse_working)
+        self.set_interval(0.05, self._finish_scan)
 
     def _pulse_working(self) -> None:
         """仅运行中的状态点闪动；不触发发现、导航或图片上传。"""
+        if not self.is_running or self._quitting:
+            return
         if any(row.session is not None and row.session.state is PaneState.WORKING
                for row in self.model.rows()):
             self._working_bright = not self._working_bright
@@ -286,20 +298,56 @@ class SidebarApp(App):
     # ---- 刷新 ----
 
     def _tick(self) -> None:
-        self.model.reload()
-        self._paint()
+        if not self.is_running or self._quitting or self._scan_pending:
+            return
+        self._scan_pending = True
+        Thread(target=self._scan, daemon=True).start()
+
+    def _scan(self) -> None:
+        # 后台只生成快照；选中、导航和绘制仍在界面线程处理。
+        try:
+            tree = self.model.fetch_tree()
+        except Exception as exc:
+            self._scan_results.put((None, exc))
+        else:
+            self._scan_results.put((tree, None))
+
+    def _finish_scan(self) -> None:
+        if not self.is_running or self._quitting:
+            return
+        try:
+            tree, error = self._scan_results.get_nowait()
+        except Empty:
+            return
+        self._scan_pending = False
+        def result():
+            if error is not None:
+                raise error
+            return tree
+        self.model.reload(result)
+        if self.is_running and not self._quitting:
+            self._paint()
 
     def _sync_host(self) -> None:
+        if not self.is_running or self._quitting:
+            return
         previous = (self.model.selected, set(self.model.collapsed), self.model.message)
         self.model.sync_current()
         old_origin = self._image_origin
         if self.image_origin is not None:
-            self._image_origin = self.image_origin()
+            self._image_origin = self._read_image_origin()
         if previous != (self.model.selected, self.model.collapsed, self.model.message) or old_origin != self._image_origin:
             self._paint()
             return  # 图片缓存随文本帧准备，位置变化由标记重绘。
         # PNG 每个实例只上传一次，宿主重绘保留图片位置标记。
         self._paint_images()
+
+    def _read_image_origin(self) -> tuple[int, int, str] | None:
+        try:
+            return self.image_origin()
+        except TmuxError as exc:
+            self.model.message = f"图片宿主查询失败：{exc}"
+            return None
 
     def _display(self, screen, renderable) -> None:
         """先准备 PNG 缓存，再由普通文本帧绘制位置标记。"""
@@ -324,6 +372,7 @@ class SidebarApp(App):
         self._uploaded_images.clear()
 
     def action_quit(self) -> None:
+        self._quitting = True
         self._release_images()
         self.exit()
 

@@ -147,7 +147,7 @@ def _run_in_pane(tmux: Tmux, current_pane: str, interval: float, instance: str |
                 session.backend_target,
                 focus_target=True,
             )
-        except SidebarError as exc:
+        except (SidebarError, TmuxError) as exc:
             model.message = str(exc)
         else:
             model.message = ""
@@ -175,7 +175,10 @@ def _run_in_pane(tmux: Tmux, current_pane: str, interval: float, instance: str |
     finally:
         # 退出时把导航带走的终端送回它原来的 session：否则那个 session 会一直
         # detached，下次启动侧栏时因「只看附着会话」而看不到它。
-        manager.restore_client()
+        try:
+            manager.restore_client()
+        except TmuxError as exc:
+            print(f"agent-tree: 退出时恢复 client 失败：{exc}", file=sys.stderr)
     return 0
 
 

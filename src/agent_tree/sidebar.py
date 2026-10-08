@@ -118,6 +118,7 @@ class SidebarManager:
         self.last_target = target_pane
         self._synced_target: str | None = None
         self.client_name = client_name
+        self._width_context: tuple[int, tuple[str, ...]] | None = None
         #: 被导航 ``switch-client`` 带走的 client：``(name, 原 session, 带到的 session)``。
         #: 退出侧栏时要把它送回原 session，否则它的原 session 会一直被留在 detached，
         #: 下次启动侧栏时因「只看附着会话」而看不到。
@@ -315,6 +316,32 @@ class SidebarManager:
 
     # ---- 导航 ----
 
+    def sync_width(self) -> None:
+        """窗口宽度或 pane 集合变化后校正自建侧栏，保留手动拖动。"""
+        if self.pane_id is None:
+            return
+        fmt = SEP.join(("#{pane_id}", "#{pane_width}", "#{window_width}", "#{window_zoomed_flag}"))
+        result = self.tmux.run("list-panes", "-t", self.pane_id, "-F", fmt)
+        panes = [line.split(SEP) for line in result.stdout.splitlines()]
+        if not panes or any(len(fields) != 4 for fields in panes):
+            return
+        own = next((fields for fields in panes if fields[0] == self.pane_id), None)
+        if own is None or own[3] != "0":
+            return
+        window_width = _to_int(own[2], 0)
+        context = (window_width, tuple(sorted(fields[0] for fields in panes)))
+        if context == self._width_context:
+            return
+        if len(panes) > 1 and window_width >= MIN_TERMINAL_COLUMNS:
+            desired = (window_width * _to_int(self.width[:-1], 0) // 100
+                       if self.width.endswith("%") else _to_int(self.width, 0))
+            desired = min(desired, window_width - 2)
+            if desired > 0 and desired != _to_int(own[1], 0):
+                if not self.is_mine(self.pane_id):
+                    raise SidebarError("侧栏所有权已失效，未调整宽度")
+                self.tmux.run("resize-pane", "-t", self.pane_id, "-x", str(desired))
+        self._width_context = context
+
     def follow_client(self) -> str | None:
         """跟随绑定终端的当前窗口，只迁移侧栏，保留目标输入焦点。
 
@@ -344,6 +371,7 @@ class SidebarManager:
                               "-t", client.pane_id, "-l", self.width)
             except TmuxCommandError as exc:
                 raise SidebarError(f"跟随窗口失败：{exc}") from exc
+        self.sync_width()
         if client.pane_id != self.pane_id:
             self.last_target = client.pane_id
             self._synced_target = client.pane_id
@@ -383,6 +411,9 @@ class SidebarManager:
         switching = client is not None and client.session_name != target_session
         switch = ("switch-client", "-c", client.name, "-t", window) if switching else None
         if location is not None and location.window != window:
+            for pane in self.owned_panes():
+                if pane != self.pane_id and self.location_of(pane) == Location(target_session, target_window_index):
+                    raise SidebarError("目标窗口已有其他侧栏，未重复迁入")
             if switch is not None and self._alone_in_window(location):
                 commands.append(switch)  # 先带走 client，避免空窗口销毁导致断开。
             commands.append((

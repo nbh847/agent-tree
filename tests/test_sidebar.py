@@ -142,6 +142,33 @@ class ClientListingTests(unittest.TestCase):
         self.assertEqual(clients[1].activity, 7)
 
 
+class WidthTests(unittest.TestCase):
+    def test_zoom_does_not_resize_or_forget_previous_layout(self):
+        tmux = FakeTmux()
+        manager = make_manager(tmux)
+        fields = ["%9", "85", "200", "1"]
+        context = (200, ("%1", "%9"))
+        manager._width_context = context
+        with patch.object(tmux, "run", return_value=subprocess.CompletedProcess([], 0, SEP.join(fields), "")) as run:
+            manager.sync_width()
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual(manager._width_context, context)
+
+    def test_changed_layout_does_not_resize_another_instances_pane(self):
+        tmux = FakeTmux()
+        manager = make_manager(tmux)
+        tmux.panes["%9"] = "other"
+        original = tmux._respond
+        def respond(args):
+            if args[0] == "list-panes":
+                return SEP.join(("%9", "85", "200", "0")) + "\n" + SEP.join(("%1", "114", "200", "0")), 0
+            return original(args)
+        tmux._respond = respond
+        with self.assertRaisesRegex(SidebarError, "所有权"):
+            manager.sync_width()
+        self.assertEqual(tmux.called("resize-pane"), [])
+
+
 class ImageHostTests(unittest.TestCase):
     def test_passthrough_only_changes_owned_pane(self):
         tmux = FakeTmux()
@@ -359,6 +386,17 @@ class LaunchTests(unittest.TestCase):
 
 
 class NavigateTests(unittest.TestCase):
+    def test_existing_sidebar_rejects_navigation_before_any_mutation(self):
+        self.tmux.panes["%8"] = "old"
+        self.tmux.locations["%8"] = ("s1", 1)
+        self.tmux.window_panes["s0:1"] = ["%9"]
+        with self.assertRaisesRegex(SidebarError, "已有其他侧栏"):
+            self.manager.navigate("s1", 1, "%2", focus_target=True)
+        self.assertEqual(self.tmux.queues, [])
+        self.assertEqual(self.tmux.called("join-pane"), [])
+        self.assertEqual(self.tmux.called("switch-client"), [])
+        self.assertEqual(self.tmux.called("select-pane"), [])
+
     def setUp(self):
         self.tmux = FakeTmux()
         self.tmux.panes = {"%9": "inst", "%1": "", "%2": ""}

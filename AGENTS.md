@@ -43,3 +43,5 @@ bin/agent-tree                                               # 在 tmux 内启�
 ```
 
 集成测试只使用独立 socket 与自建 pane，结束后清理，不接触用户会话。为不破坏用户鼠标与布局设置，侧栏对 tmux 选项的修改必须限定窗口级并恢复；图片透传仅在本实例自建 pane 上设置 pane 级 `allow-passthrough`，随该 pane 回收，不修改用户 pane 或窗口选项。textual 需要所在 pane 的 client 附着才会渲染，验证侧栏外观时须让该 session 有 client 附着（例如 `script -q /dev/null tmux -L <socket> attach -t <session>`）。
+
+会话扫描在后台生成快照，界面模型、导航与绘制只能在界面线程更新；单实例最多一轮扫描在途。外部查询必须有超时，扫描退出与失败边界、导航侧栏冲突的验证说明见 `docs/architecture.md` 与 `docs/validation.md`。

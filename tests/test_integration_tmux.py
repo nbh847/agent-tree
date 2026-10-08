@@ -29,7 +29,7 @@ from agent_tree.discovery import discover
 from agent_tree.grouping import build_tree
 from agent_tree.icons import PLACEHOLDER, payload
 from agent_tree.model import AgentKind
-from agent_tree.sidebar import SidebarManager, list_clients
+from agent_tree.sidebar import SidebarError, SidebarManager, list_clients
 from agent_tree.tmux import SIDEBAR_OPTION, Tmux
 
 SOCKET = "agent-tree-itest"
@@ -186,6 +186,25 @@ class DiscoveryIntegrationTests(unittest.TestCase):
         completed = self.tmux.run("display-message", "-p", "-t", pane_id, "#{pane_width}")
         return int(completed.stdout.strip())
 
+    def test_navigation_to_existing_sidebar_preserves_both_windows(self):
+        sides = []
+        for name in ("a", "b"):
+            self.tmux.run("new-session", "-d", "-s", name, "-x", "120", "-y", "40")
+            side = self.tmux.run("split-window", "-h", "-d", "-t", name,
+                                 "-P", "-F", "#{pane_id}", "sleep", "900").stdout.strip()
+            self.tmux.run("set-option", "-p", "-t", side, SIDEBAR_OPTION, name)
+            sides.append(side)
+        target = next(p.pane_id for p in self.tmux.snapshot()
+                      if p.session_name == "b" and not p.is_sidebar)
+        before = self.tmux.run("list-windows", "-a", "-F", "#{window_id} #{window_layout}").stdout
+        manager = SidebarManager(self.tmux, "a", pane_id=sides[0])
+        window_index = manager.location_of(target).window_index
+        with self.assertRaisesRegex(SidebarError, "已有其他侧栏"):
+            manager.navigate("b", window_index, target, focus_target=True)
+        after = self.tmux.run("list-windows", "-a", "-F", "#{window_id} #{window_layout}").stdout
+        self.assertEqual(before, after)
+        self.assertEqual(set(manager.owned_panes()), set(sides))
+
     def test_new_session_keeps_sidebar_width(self) -> None:
         # new-session 默认按 80x24 建 session：join-pane 的 30% 按 80 列算，
         # client 切过去窗口放大重排后侧栏被摊宽。按当前窗口尺寸新建则全程不变。
@@ -199,6 +218,34 @@ class DiscoveryIntegrationTests(unittest.TestCase):
         self.assertEqual(before, int(178 * 0.24))
         manager.new_session(self.other)
         self.assertEqual(self._pane_width(side), before)
+
+    def test_width_recovers_after_neighbor_closes_and_window_resizes(self):
+        self.tmux.run("new-session", "-d", "-s", "width", "-x", "200", "-y", "40")
+        user = self.tmux.run("display-message", "-p", "-t", "width", "#{pane_id}").stdout.strip()
+        sides = []
+        for owner in ("old", "new"):
+            side = self.tmux.run("split-window", "-d", "-b", "-h", "-t", user,
+                                 "-l", "24%", "-P", "-F", "#{pane_id}", "sleep", "900").stdout.strip()
+            self.tmux.run("set-option", "-p", "-t", side, SIDEBAR_OPTION, owner)
+            sides.append(side)
+        manager = SidebarManager(self.tmux, "new", pane_id=sides[1])
+        manager.sync_width()
+        self.assertEqual(self._pane_width(sides[1]), 48)
+        self.tmux.run("kill-pane", "-t", sides[0])
+        self.assertGreater(self._pane_width(sides[1]), 48)
+        manager.sync_width()
+        self.assertEqual(self._pane_width(sides[1]), 48)
+        self.tmux.run("resize-pane", "-t", sides[1], "-x", "60")
+        manager.sync_width()
+        self.assertEqual(self._pane_width(sides[1]), 60)  # 同布局下保留手动宽度。
+        self.tmux.run("resize-window", "-t", "width", "-x", "160")
+        manager.sync_width()
+        self.assertEqual(self._pane_width(sides[1]), 38)
+        manager.width = "35"
+        self.tmux.run("resize-window", "-t", "width", "-x", "180")
+        manager.sync_width()
+        self.assertEqual(self._pane_width(sides[1]), 35)
+        self.assertTrue(manager.alive(user))
 
     def test_companion_exit_replaces_sidebar_target(self) -> None:
         # 侧栏旁的用户 pane 全部关闭（如 shell exit）后，侧栏自动补位：

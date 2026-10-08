@@ -109,8 +109,10 @@ class Tmux:
     def run(self, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
         try:
             completed = subprocess.run(
-                [*self._base(), *args], capture_output=True, text=True
+                [*self._base(), *args], capture_output=True, text=True, timeout=2
             )
+        except subprocess.TimeoutExpired as exc:
+            raise TmuxCommandError(args, -1, "查询超时（2 秒）") from exc
         except FileNotFoundError as exc:
             raise TmuxUnavailable(f"未找到 tmux 可执行文件：{self.executable}") from exc
         if check and completed.returncode != 0:

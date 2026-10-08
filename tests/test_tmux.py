@@ -89,6 +89,12 @@ class SnapshotTests(unittest.TestCase):
 
 
 class ErrorSemanticsTests(unittest.TestCase):
+    def test_timeout_is_reported_even_when_check_false(self):
+        with mock.patch("agent_tree.tmux.subprocess.run", side_effect=subprocess.TimeoutExpired("tmux", 2)) as run:
+            with self.assertRaisesRegex(TmuxCommandError, "超时"):
+                Tmux().run("list-panes", check=False)
+        self.assertEqual(run.call_args.kwargs["timeout"], 2)
+
     def test_ensure_server_raises_when_socket_missing(self):
         with mock.patch.object(
             Tmux, "run", return_value=_completed(returncode=1, stderr="no server")

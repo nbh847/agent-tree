@@ -106,7 +106,11 @@ class SidebarModel:
         self.active_pane: str | None = None
         self._pending_active = False
 
-    def reload(self) -> None:
+    def fetch_tree(self) -> Tree:
+        """读取快照；可在后台调用，不修改界面模型。"""
+        return self._refresh()
+
+    def reload(self, refresh: Callable[[], Tree] | None = None) -> None:
         """重新获取树。``generation`` 递增，供后续异步结果避免过期覆盖。
 
         单次刷新失败只显示错误信息，不终止侧栏，也不结束用户进程。
@@ -116,7 +120,7 @@ class SidebarModel:
         self.sync_current()
         selected_row = self._current()
         try:
-            self.tree = self._refresh()
+            self.tree = (refresh or self.fetch_tree)()
             if selected_row is not None:
                 for index, row in enumerate(self.rows()):
                     if (row.kind, row.group.key, row.session.session_key if row.session else None) == (

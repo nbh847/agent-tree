@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import unittest
+from threading import Event
 from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import Mock, PropertyMock, patch
@@ -71,6 +72,63 @@ def sample_rows():
 
 @unittest.skipUnless(HAVE_TEXTUAL, "需要安装 textual")
 class CurrentPaneUITests(unittest.IsolatedAsyncioTestCase):
+    def test_timers_ignore_scan_results_after_app_stops(self):
+        loader = Mock(return_value=build_tree([make_session()]))
+        model = tui.SidebarModel(loader)
+        app = ui.SidebarApp(model)
+        app._scan_results.put((loader.return_value, None))
+        app._finish_scan()
+        app._tick()
+        app._sync_host()
+        app._pulse_working()
+        loader.assert_not_called()
+        self.assertEqual(model.tree, ())
+        self.assertEqual(model.generation, 0)
+
+    async def test_blocked_scan_keeps_input_responsive_and_never_overlaps(self):
+        entered, release = Event(), Event()
+        tree = build_tree([make_session()])
+        def load():
+            entered.set()
+            release.wait(30)
+            return tree
+        loader = Mock(side_effect=load)
+        model = tui.SidebarModel(loader)
+        model.tree = tree
+        model.loading = False
+        app = ui.SidebarApp(model)
+        try:
+            async with app.run_test(size=(30, 16)) as pilot:
+                await pilot.pause()
+                self.assertTrue(entered.is_set())
+                app._tick()
+                app._tick()
+                self.assertEqual(loader.call_count, 1)
+                await pilot.press("down")
+                self.assertEqual(model.selected, 1)
+                model.select(0)
+                await pilot.press("space")
+                self.assertTrue(model.collapsed)
+                await pilot.press("q")
+                self.assertFalse(release.is_set())
+        finally:
+            release.set()
+
+    async def test_failed_scan_retains_tree_and_recovers(self):
+        tree = build_tree([make_session()])
+        loader = Mock(side_effect=[RuntimeError("scan failed"), tree])
+        model = tui.SidebarModel(loader)
+        model.tree = tree
+        app = ui.SidebarApp(model)
+        async with app.run_test(size=(30, 16)) as pilot:
+            await pilot.pause()
+            self.assertEqual(model.tree, tree)
+            self.assertIn("scan failed", model.message)
+            app._tick()
+            await pilot.pause()
+            self.assertEqual(model.message, "")
+            self.assertEqual(model.tree, tree)
+
     async def test_only_working_dot_pulses_without_navigation_or_reload(self):
         session = replace(make_session(), state=PaneState.WORKING)
         loader = Mock(side_effect=lambda: build_tree([session]))
@@ -318,6 +376,7 @@ class CurrentPaneUITests(unittest.IsolatedAsyncioTestCase):
         model.on_navigate = navigated.append
         app = ui.SidebarApp(model)
         async with app.run_test(size=(40, 20)) as pilot:
+            await pilot.pause()
             for key, target in [("down", "%0"), ("down", "%1"), ("down", "%1"), ("up", "%0"), ("up", "%0")]:
                 await pilot.press(key)
                 self.assertEqual(model.current_session().backend_target, target)

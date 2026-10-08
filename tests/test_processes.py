@@ -3,11 +3,18 @@
 from __future__ import annotations
 
 import unittest
+import subprocess
+from unittest.mock import patch
 
 from agent_tree import processes
 
 
 class ParseTests(unittest.TestCase):
+    def test_snapshot_timeout_degrades_to_empty(self):
+        with patch("agent_tree.processes.subprocess.run", side_effect=subprocess.TimeoutExpired("ps", 2)) as run:
+            self.assertEqual(processes.snapshot(), {})
+        self.assertEqual(run.call_args.kwargs["timeout"], 2)
+
     def test_parse_reads_pid_ppid_and_argv(self):
         text = (
             "  100   1 /sbin/launchd\n"
