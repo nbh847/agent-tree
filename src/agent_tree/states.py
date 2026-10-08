@@ -10,6 +10,8 @@ _ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _RUNNING = re.compile(r"^\S.*\(.*\d+(?:s|m|h).*\besc to interrupt\)", re.I)
 _CODEX_CLOCK = re.compile(r"^[•◦]\s+.+\(\d+(?:h(?:\s+\d+m)?(?:\s+\d+s)?|m(?:\s+\d+s)?|s)\)(?:\s|$)")
 _CLAUDE_RUNNING = re.compile(r"^[✻✽✶✳✢·*].*….*\(.*(?:esc to interrupt|\d+s|\d+m)", re.I)
+_CODEBUDDY_RUNNING = re.compile(r"^[✶✸✹✺✷]\s+.+…\s+\(\d+(?:s|m|h)\s*[·)]", re.I)
+_CODEX_LIMIT_NOTICE = re.compile(r"^⚠ 5h limit: (?:only )?\d+% left · resets at .+ · /status$")
 
 
 def detect_state(agent: AgentKind, screen: str | None) -> tuple[PaneState, str]:
@@ -23,17 +25,31 @@ def detect_state(agent: AgentKind, screen: str | None) -> tuple[PaneState, str]:
     # 保留空行位置，避免历史内容因去掉空白被拉入输入区。
     tail = lines[-12:]
     prompts = [i for i, line in enumerate(tail) if line.startswith(("›", "❯"))]
+    if agent is AgentKind.CODEBUDDY:
+        prompts += [i for i, line in enumerate(tail)
+                    if line.startswith(">") and i > 0 and i + 1 < len(tail)
+                    and all(re.match(r"^[─━]{5,}$", tail[j]) for j in (i - 1, i + 1))]
+        prompts.sort()
     if prompts:
         # 正文位于输入框上方；仅保留紧邻最新输入框的运行指示区。
         start = max(0, prompts[-1] - 3)
         if agent is AgentKind.CODEX:
-            # Codex 会在运行指示与输入框之间插入 Tip 和空行。
+            # Codex 会在运行指示与输入框之间插入 Tip、额度提醒和空行。
             # 只跨过这些装饰行，遇到正文即停止，避免捞取历史状态。
             index = prompts[-1] - 1
-            while index >= 0 and (not tail[index] or tail[index].startswith("└ Tip:")):
+            while index >= 0 and (not tail[index] or tail[index].startswith("└ Tip:")
+                                  or _CODEX_LIMIT_NOTICE.fullmatch(tail[index])):
                 index -= 1
             if index >= 0:
                 start = min(start, index)
+        elif agent is AgentKind.CODEBUDDY and prompts[-1] > 0:
+            index = prompts[-1] - 1
+            if re.match(r"^[─━]{5,}$", tail[index]):
+                index -= 1
+                while index >= 0 and (not tail[index] or tail[index].startswith("└ Tip:")):
+                    index -= 1
+                if index >= 0:
+                    start = index
         tail = tail[start:]
     text = "\n".join(tail).lower()
     # 确认框必须同时有操作键提示和选项；普通回答中的问句不算。
@@ -52,7 +68,9 @@ def detect_state(agent: AgentKind, screen: str | None) -> tuple[PaneState, str]:
         ):
             return PaneState.IDLE, "screen:codex-composer"
     elif agent in {AgentKind.CLAUDE_CODE, AgentKind.CODEBUDDY}:
-        if any(_RUNNING.search(line) or _CLAUDE_RUNNING.search(line) for line in tail):
+        if any(_RUNNING.search(line) or _CLAUDE_RUNNING.search(line)
+               or (agent is AgentKind.CODEBUDDY and _CODEBUDDY_RUNNING.search(line))
+               for line in tail):
             return PaneState.WORKING, "screen:interrupt-status"
         # Claude 风格输入框必须有上下边框，单独正文中的 ❯ 不算。
         for index, line in enumerate(tail):

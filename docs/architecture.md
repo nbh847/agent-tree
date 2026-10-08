@@ -40,9 +40,9 @@ Pi 显示名为 `Pi`，支持 `pi` 可执行文件与启动命令，以及 Node�
 
 身份与执行状态分别判断：识别出 Codex 不代表知道它是否正在执行。身份优先用可信启动元数据和进程可执行文件／参数，屏幕特征作为补充；node、python、shell 包装不能单靠进程名定性。
 
-当前由 `states.py` 匹配 tmux 当前屏幕底部 12 行，并在发现最新输入提示符时进一步限制到其前 3 行及输入区；Codex 额外跨过紧邻输入框的空行与 `└ Tip:` 装饰行，纳入其上方一行运行指示，遇到正文即停止，仍不超出底部 12 行。不读取 scrollback。只采样进程树中仍有已识别 Agent 的 pane，历史启动命令不足以触发采样。复制模式或 capture 失败立即回退未知，每次刷新独立判断，不保留上一轮状态，不产生乱序事件。屏幕文本只留在本次调用内存中。
+当前由 `states.py` 匹配 tmux 当前屏幕底部 12 行，并在发现最新输入提示符时进一步限制到其前 3 行及输入区；Codex 额外跨过紧邻输入框的空行、`└ Tip:` 与明确格式的 `⚠ 5h limit: … · /status` 提醒行（兼容低额度的 `only` 前缀），纳入其上方一行运行指示，遇到正文即停止，仍不超出底部 12 行。不读取 scrollback。只采样进程树中仍有已识别 Agent 的 pane，历史启动命令不足以触发采样。复制模式或 capture 失败立即回退未知，每次刷新独立判断，不保留上一轮状态，不产生乱序事件。屏幕文本只留在本次调用内存中。
 
-Codex 根据带计时的执行指示、选择框和 composer 底栏匹配；执行指示与确认框优先于空闲输入框。依据为 [官方运行指示源码](https://github.com/openai/codex/blob/main/codex-rs/tui/src/status_indicator_widget.rs) 与 [官方授权框源码](https://github.com/openai/codex/blob/main/codex-rs/tui/src/bottom_pane/approval_overlay.rs) ，并核对本机输入区。Claude Code 匹配执行 spinner 和带上下边框的输入框；CodeBuddy 核对本机 2.161.0 的 `dist/codebuddy.js` 中中断计时、授权选项与输入区实现，沿用对应匹配。Pi 核对本机 1.0.3 的 `status-indicator.js` 与 `interactive-mode.js`，只接受带中断／取消提示的运行指示；默认 Working 文案可被扩展改写，缺少明确提示时保持未知。带数字选项和确认／取消按键的当前选择框显示待操作；普通回答中的问句不算。
+Codex 根据带计时的执行指示、选择框和 composer 底栏匹配；执行指示与确认框优先于空闲输入框。依据为 [官方运行指示源码](https://github.com/openai/codex/blob/main/codex-rs/tui/src/status_indicator_widget.rs) 与 [官方授权框源码](https://github.com/openai/codex/blob/main/codex-rs/tui/src/bottom_pane/approval_overlay.rs) ，并核对本机输入区。Claude Code 匹配执行 spinner 和带上下边框的输入框；CodeBuddy 核对本机 2.161.0 的 `dist/codebuddy.js` 中星形 spinner、计时、授权选项与输入区实现，额外匹配 `✶✸✹✺✷` 开头且包含省略号和计时的运行指示。CodeBuddy 的 `>` 输入框仅在上下边框完整时作为实时区域锚点，向上跨过边框、空行和单行 Tip，遇到正文停止，不扩大底部 12 行采样范围。Pi 核对本机 1.0.3 的 `status-indicator.js` 与 `interactive-mode.js`，只接受带中断／取消提示的运行指示；默认 Working 文案可被扩展改写，缺少明确提示时保持未知。带数字选项和确认／取消按键的当前选择框显示待操作；普通回答中的问句不算。
 
 状态证据建议顺序为已验证的结构化事件、活跃界面或 OSC 信号、低可信启发式。事件必须关联目标会话并处理乱序、过期和退出；屏幕检测限制到当前可变区域，避开历史记录与 transcript viewer。无输出或进程存活只能作为观察事实。
 

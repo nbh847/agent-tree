@@ -33,6 +33,24 @@ class StateTests(unittest.TestCase):
                     screen = status + gap + "› Ask Codex to do anything\n\nGPT-6.1-Sol low · ~/repo"
                     self.assertEqual(detect_state(AgentKind.CODEX, screen)[0], PaneState.WORKING)
 
+    def test_codex_limit_notice_does_not_hide_working_status(self):
+        notice = "⚠ 5h limit: 34% left · resets at 18:45 · /status"
+        composer = "\n\n› Ask Codex to do anything\n\nGPT-6.1-Sol low · ~/repo"
+        screen = "• Working (2m 02s • esc to interrupt)\n\n" + notice + composer
+        self.assertEqual(detect_state(AgentKind.CODEX, screen)[0], PaneState.WORKING)
+        screen = "• Working (2m 02s • esc to interrupt)\nanswer\nanswer\n" + notice + composer
+        self.assertEqual(detect_state(AgentKind.CODEX, screen)[0], PaneState.IDLE)
+        self.assertEqual(detect_state(AgentKind.CODEX, notice + composer)[0], PaneState.IDLE)
+
+    def test_codex_low_limit_notice_does_not_hide_working_status(self):
+        notice = "⚠ 5h limit: only 2% left · resets at 18:45 · /status"
+        composer = "\n\n› Ask Codex to do anything\n\nGPT-6.1-Sol low · ~/repo\n← for agents · ? for shortcuts"
+        screen = "• Working (29s • esc to interrupt)\n\n" + notice + composer
+        self.assertEqual(detect_state(AgentKind.CODEX, screen)[0], PaneState.WORKING)
+        screen = "• Working (29s • esc to interrupt)\nanswer\nanswer\n" + notice + composer
+        self.assertEqual(detect_state(AgentKind.CODEX, screen)[0], PaneState.IDLE)
+        self.assertEqual(detect_state(AgentKind.CODEX, notice + composer)[0], PaneState.IDLE)
+
     def test_codex_tip_does_not_pull_status_across_answer(self):
         screen = ("• Working (32s • esc to interrupt)\nanswer\nanswer\nanswer\n"
                   "  └ Tip: Use the desktop app.\n\n\n"
@@ -44,6 +62,28 @@ class StateTests(unittest.TestCase):
             with self.subTest(kind=kind):
                 self.assertEqual(detect_state(kind, "─────────\n❯ Try something\n─────────\n⏵⏵ auto mode on")[0], PaneState.IDLE)
                 self.assertEqual(detect_state(kind, "✻ Thinking… (12s · esc to interrupt)\n─────────\n❯ \n─────────")[0], PaneState.WORKING)
+
+    def test_codebuddy_star_frames_with_tip_and_bounded_composer(self):
+        for frame in "✶✸✹✺✷":
+            with self.subTest(frame=frame):
+                screen = (f"{frame} Calling… (75s · running Bash · ⚒ 21 tokens · Task running for a while)\n"
+                          "  └ Tip: Create custom slash commands\n\n"
+                          "─────────\n>\n─────────\n⏵⏵ auto mode on\n\n\n\n\n\n")
+                self.assertEqual(detect_state(AgentKind.CODEBUDDY, screen)[0], PaneState.WORKING)
+
+    def test_codebuddy_old_spinner_does_not_cross_answer(self):
+        screen = ("✹ Calling… (75s · running Bash)\nanswer\nanswer\nanswer\n"
+                  "─────────\n> next task\n─────────\n⏵⏵ auto mode on")
+        self.assertEqual(detect_state(AgentKind.CODEBUDDY, screen)[0], PaneState.IDLE)
+        self.assertEqual(detect_state(AgentKind.CODEBUDDY, "✹ Calling…")[0], PaneState.UNKNOWN)
+        self.assertEqual(detect_state(AgentKind.CODEBUDDY, "Calling… (75s)")[0], PaneState.UNKNOWN)
+
+    def test_codebuddy_thinking_streaming_and_tool_execution_are_working(self):
+        for phase in ("thinking", "waiting for model", "streaming", "editing", "running Bash"):
+            with self.subTest(phase=phase):
+                screen = (f"✹ Linking… (162s · {phase} · ↑ 296 tokens)\n\n"
+                          "─────────\n>\n─────────\n⏵⏵ auto mode on")
+                self.assertEqual(detect_state(AgentKind.CODEBUDDY, screen)[0], PaneState.WORKING)
 
     def test_dialog_requires_choices_and_controls(self):
         screen = "Would you like to run the following command?\n› 1. Yes\n  2. No\nPress enter to confirm or esc to cancel"
