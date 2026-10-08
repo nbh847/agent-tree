@@ -25,7 +25,16 @@ def detect_state(agent: AgentKind, screen: str | None) -> tuple[PaneState, str]:
     prompts = [i for i, line in enumerate(tail) if line.startswith(("›", "❯"))]
     if prompts:
         # 正文位于输入框上方；仅保留紧邻最新输入框的运行指示区。
-        tail = tail[max(0, prompts[-1] - 3):]
+        start = max(0, prompts[-1] - 3)
+        if agent is AgentKind.CODEX:
+            # Codex 会在运行指示与输入框之间插入 Tip 和空行。
+            # 只跨过这些装饰行，遇到正文即停止，避免捞取历史状态。
+            index = prompts[-1] - 1
+            while index >= 0 and (not tail[index] or tail[index].startswith("└ Tip:")):
+                index -= 1
+            if index >= 0:
+                start = min(start, index)
+        tail = tail[start:]
     text = "\n".join(tail).lower()
     # 确认框必须同时有操作键提示和选项；普通回答中的问句不算。
     menu = any(re.match(r"^[›❯>]?\s*[1-9][.)]\s", line) for line in tail)

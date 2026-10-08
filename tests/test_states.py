@@ -26,6 +26,19 @@ class StateTests(unittest.TestCase):
         self.assertEqual(detect_state(AgentKind.CODEX, screen)[0], PaneState.IDLE)
         self.assertEqual(detect_state(AgentKind.CODEX, "esc to interrupt\nDone")[0], PaneState.UNKNOWN)
 
+    def test_codex_running_status_above_tip_and_blank_lines(self):
+        for status in ("• Working (32s • esc to interrupt)", "• Mapping the app (1m 03s)"):
+            for gap in ("\n  └ Tip: Use the desktop app.\n\n\n", "\n\n\n\n"):
+                with self.subTest(status=status, gap=gap):
+                    screen = status + gap + "› Ask Codex to do anything\n\nGPT-6.1-Sol low · ~/repo"
+                    self.assertEqual(detect_state(AgentKind.CODEX, screen)[0], PaneState.WORKING)
+
+    def test_codex_tip_does_not_pull_status_across_answer(self):
+        screen = ("• Working (32s • esc to interrupt)\nanswer\nanswer\nanswer\n"
+                  "  └ Tip: Use the desktop app.\n\n\n"
+                  "› Ask Codex to do anything\n\nGPT-6.1-Sol low · ~/repo")
+        self.assertEqual(detect_state(AgentKind.CODEX, screen)[0], PaneState.IDLE)
+
     def test_claude_and_codebuddy_input_and_spinner(self):
         for kind in (AgentKind.CLAUDE_CODE, AgentKind.CODEBUDDY):
             with self.subTest(kind=kind):
