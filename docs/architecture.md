@@ -10,7 +10,11 @@
 
 已确定采用「tmux CLI → 会话快照 → 目录聚合与检测 → TUI 侧栏」结构。观察面读取 pane 元数据与 Agent 当前屏幕输入区；操作面仅定位已有 pane，生命周期管理只涉及自建侧栏 pane。tmux 拥有用户终端与 Agent 生命周期。
 
-侧栏放在当前 window 左侧专用 pane 中，观察同一 server／socket 内各 session、window 的 Agent pane，并排除所有 agent-tree 自建 pane。iTerm2 等终端仅承载 tmux，不使用其原生 API、Toolbelt 或网页服务。
+侧栏放在当前 window 左侧专用 pane 中，观察同一 server／socket 内各 session、window 的 Agent pane，并排除所有 agent-tree 自建 pane。不使用宿主原生侧栏、Toolbelt 或网页服务；iTerm2 脚本接口只用于可降级的鼠标报告恢复，不参与发现、导航或界面渲染。
+
+macOS 且启动宿主为 iTerm2 时，独立后台线程每 5 秒查询绑定 TTY 的 `mouseReportingMode`，同一实例最多一轮检查在途。仅当模式为 `-1`、tmux 的有效 mouse 开启、绑定 client 仍附着且未挂起、其当前窗口包含本实例的侧栏并且未 zoom 时，向该 client TTY 非阻塞写入 `ESC[?1003h` 与 `ESC[?1006h`。AppleScript 参数通过 argv 传递，不拼接 shell；TTY 仅接受 macOS 的 `/dev/ttys<数字>`。查询后再次核对 client PID、窗口、flags、mouse 与 pane 所有权；退出使用停止事件阻止后台修复，不等待查询。正常模式或未找到 iTerm2 会话不写入；权限、宿主查询、设备写入失败时在界面线程停用本次自动恢复，底栏保留错误提示。该机制不读取 TTY、不发送输入、不改配置、不经 pane 透传广播到其他 client，也不接管断连后的其他终端。
+
+已核对 [iTerm2 变量说明](https://iterm2.com/documentation-variables.html) 的 `-1` 为停止报告；[tmux 3.7c 鼠标模式实现](https://github.com/tmux/tmux/blob/3.7c/tty.c#L809-L846) 按内部 mode 缓存判断是否重发控制码，[普通 refresh-client](https://github.com/tmux/tmux/blob/3.7c/cmd-refresh-client.c#L276-L282) 只请求重绘。因此终端状态与缓存不一致时，普通重绘不能保证恢复。自动恢复针对已确认的故障状态；终端为何停止报告的原始触发源仍待确认，不能据此宣称已消除该触发源。宿主脚本不可用时保持键盘与列表功能。
 
 导航明确记录发起操作的 client 和目标 session／window／pane；跨 session 操作不切换其他 client 的 session。共享 session 的 window 选择可能影响其他 client，需通过原型确认实际行为与提示策略。跨 window 持续显示采用**迁移单个自建侧栏（join-pane）**方案：仅在当前 window 维护一个侧栏实例，导航时把侧栏迁移进目标 window 再切换发起 client。不采用「每个 window 各建侧栏」，因为它需要按 window 焦点创建、依赖 hook，并持久改变所有 window 布局，超出最小范围。实测见 [验证记录](/Users/mac/workspace/agent-tree/docs/validation.md) 。启动时绑定注视目标窗口的 client（多个时取最近活跃者），将 client 名、初始目标 pane 和宽度传给侧栏进程。每 0.25 秒读取绑定 client 的当前位置；用户原生切换 window／session 后，以当前 pane ID 为目标执行 `join-pane -d`，只迁移自建侧栏且不切换 client、不抢输入焦点。绑定 client 断开时不接管其他终端；目标已有其他侧栏或不足 60 列时拒绝迁入。单 pane 窗口迁移仍沿用导航的销毁顺序保护。
 

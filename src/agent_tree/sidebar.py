@@ -10,10 +10,13 @@ window，再切换发起 client，最后把焦点交回侧栏。
 from __future__ import annotations
 
 import os
+import re
+import subprocess
 import sys
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Event
 
 from .tmux import SEP, SIDEBAR_OPTION, Tmux, TmuxCommandError
 
@@ -21,6 +24,20 @@ from .tmux import SEP, SIDEBAR_OPTION, Tmux, TmuxCommandError
 DEFAULT_WIDTH = "24%"
 #: 小于该列数时拒绝创建侧栏，避免侧栏本身无法使用。
 MIN_TERMINAL_COLUMNS = 60
+
+# 通过参数传 TTY，不把终端名插进 AppleScript 或 shell。
+_MOUSE_MODE_SCRIPT = '''on run argv
+tell application "iTerm2"
+repeat with w in windows
+repeat with t in tabs of w
+repeat with s in sessions of t
+if tty of s is item 1 of argv then return variable s named "mouseReportingMode"
+end repeat
+end repeat
+end repeat
+end tell
+return ""
+end run'''
 
 
 class SidebarError(RuntimeError):
@@ -209,6 +226,70 @@ class SidebarManager:
         return max(candidates, key=lambda client: client.activity)
 
     # ---- 生命周期 ----
+
+    def _mouse_client(self) -> tuple[str, ...] | None:
+        """绑定 client 仍在注视自建侧栏且 mouse 开启时，返回其身份快照。"""
+        if self.pane_id is None or self.client_name is None:
+            return None
+        if not re.fullmatch(r"/dev/ttys[0-9]+", self.client_name):
+            return None
+        pane = self.tmux.run("display-message", "-p", "-t", self.pane_id,
+                             SEP.join((f"#{{{SIDEBAR_OPTION}}}", "#{window_id}",
+                                       "#{window_zoomed_flag}")), check=False)
+        owner = pane.stdout.strip().split(SEP)
+        if pane.returncode or len(owner) != 3 or owner[0] != self.instance_id or owner[2] != "0":
+            return None
+        fmt = SEP.join(("#{client_name}", "#{client_pid}", "#{client_flags}",
+                        "#{window_id}", "#{mouse}"))
+        for line in self.tmux.run("list-clients", "-F", fmt).stdout.splitlines():
+            fields = line.split(SEP)
+            if len(fields) != 5 or fields[0] != self.client_name:
+                continue
+            flags = fields[2].split(",")
+            if (not fields[1].isdigit() or "attached" not in flags or "suspended" in flags
+                    or fields[3] != owner[1] or fields[4] != "1"):
+                return None
+            return tuple(fields)
+        return None
+
+    def repair_mouse(self, stopping: Event) -> bool:
+        """恢复 iTerm2 与 tmux 不一致的鼠标报告；调用者必须在后台执行。
+
+        不改 mouse 选项、不读取 TTY、不发送用户输入。权限拒绝或查询失败由界面
+        停用本轮运行的自动恢复，避免重复弹出授权；正常模式不写任何控制码。
+        """
+        if stopping.is_set():
+            return False
+        context = self._mouse_client()
+        if context is None or stopping.is_set():
+            return False
+        try:
+            result = subprocess.run(["osascript", "-e", _MOUSE_MODE_SCRIPT, context[0]],
+                                    capture_output=True, text=True, timeout=2)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise SidebarError("鼠标自动恢复不可用（宿主查询失败或超时）") from exc
+        if result.returncode:
+            raise SidebarError("鼠标自动恢复不可用（iTerm2 脚本访问失败）")
+        mode = result.stdout.strip()
+        if mode in {"", "0", "2", "3"}:
+            return False
+        if mode != "-1":
+            raise SidebarError("鼠标自动恢复不可用（宿主返回未知模式）")
+        # 查询期间可能发生退出、切窗、mouse off 或 TTY 被新 client 复用。
+        if stopping.is_set() or self._mouse_client() != context:
+            return False
+        fd = os.open(context[0], os.O_WRONLY | os.O_NOCTTY | os.O_NONBLOCK)
+        try:
+            if stopping.is_set():
+                return False
+            if not os.isatty(fd):
+                raise SidebarError("鼠标自动恢复不可用（绑定设备不是终端）")
+            sequence = b"\x1b[?1003h\x1b[?1006h"
+            if os.write(fd, sequence) != len(sequence):
+                raise SidebarError("鼠标自动恢复失败（协议未完整写入）")
+        finally:
+            os.close(fd)
+        return True
 
     def enable_images(self) -> bool:
         """只在本实例自建 pane 上启用透传；不支持时保留文字界面。"""

@@ -45,3 +45,5 @@ bin/agent-tree                                               # 在 tmux 内启�
 集成测试只使用独立 socket 与自建 pane，结束后清理，不接触用户会话。为不破坏用户鼠标与布局设置，侧栏对 tmux 选项的修改必须限定窗口级并恢复；图片透传仅在本实例自建 pane 上设置 pane 级 `allow-passthrough`，随该 pane 回收，不修改用户 pane 或窗口选项。textual 需要所在 pane 的 client 附着才会渲染，验证侧栏外观时须让该 session 有 client 附着（例如 `script -q /dev/null tmux -L <socket> attach -t <session>`）。
 
 会话扫描在后台生成快照，界面模型、导航与绘制只能在界面线程更新；单实例最多一轮扫描在途。外部查询必须有超时，扫描退出与失败边界、导航侧栏冲突的验证说明见 `docs/architecture.md` 与 `docs/validation.md`。
+
+iTerm2 鼠标自动恢复在独立后台线程执行，只修复绑定 client 的临时协议状态；写入前再次核对 client PID、自建 pane 所有权、当前窗口和 mouse 开启状态，退出后停止。宿主脚本失败时停用检查，不重复请求权限；不通过透传广播到共享窗口的其他 client，不改 mouse 配置。实现与限制见 `docs/architecture.md`。

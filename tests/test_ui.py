@@ -72,6 +72,47 @@ def sample_rows():
 
 @unittest.skipUnless(HAVE_TEXTUAL, "需要安装 textual")
 class CurrentPaneUITests(unittest.IsolatedAsyncioTestCase):
+    async def test_blocked_mouse_host_keeps_input_responsive_and_stops_on_quit(self):
+        entered, release = Event(), Event()
+        def check(stopping):
+            entered.set()
+            release.wait(30)
+            return not stopping.is_set()
+        guard = Mock(side_effect=check)
+        model = tui.SidebarModel(lambda: build_tree([make_session()]))
+        app = ui.SidebarApp(model, mouse_guard=guard)
+        try:
+            async with app.run_test(size=(30, 16)) as pilot:
+                await pilot.pause()
+                self.assertTrue(entered.is_set())
+                app._check_mouse_host()
+                app._check_mouse_host()
+                self.assertEqual(guard.call_count, 1)
+                await pilot.press("down")
+                self.assertEqual(model.selected, 1)
+                await pilot.press("q")
+                self.assertTrue(app._mouse_stopping.is_set())
+                self.assertFalse(release.is_set())
+                app._mouse_results.put(RuntimeError("late failure"))
+                app._finish_scan()
+                self.assertEqual(app._mouse_error, "")
+        finally:
+            release.set()
+
+    async def test_mouse_host_permission_failure_disables_retries_and_keeps_notice(self):
+        guard = Mock(side_effect=RuntimeError("脚本访问失败"))
+        model = tui.SidebarModel(lambda: build_tree([make_session()]))
+        app = ui.SidebarApp(model, mouse_guard=guard)
+        async with app.run_test(size=(30, 16)) as pilot:
+            await pilot.pause()
+            self.assertIsNone(app.mouse_guard)
+            self.assertIn("已停用自动恢复", app._mouse_error)
+            model.reload()
+            app._paint_foot()
+            self.assertIn("已停用自动恢复", app._last_text["#foot"].plain)
+            app._check_mouse_host()
+            self.assertEqual(guard.call_count, 1)
+
     def test_timers_ignore_scan_results_after_app_stops(self):
         loader = Mock(return_value=build_tree([make_session()]))
         model = tui.SidebarModel(loader)

@@ -22,6 +22,8 @@ import termios
 import time
 import unittest
 import uuid
+from threading import Event
+from unittest.mock import patch
 from pathlib import Path
 
 from agent_tree import discovery, tui
@@ -384,6 +386,42 @@ class FollowIntegrationTests(unittest.TestCase):
                 selected = any(bg in token for bg in (
                     "48;2;33;38;45", "48;2;37;37;37"))
         return False
+
+    def test_mouse_repair_only_writes_bound_client_and_respects_mouse_off(self):
+        owner = self.attach("A:first")
+        other = self.attach("A:first")
+        first = self.pane("A:first")
+        side = self.tmux.run("split-window", "-d", "-h", "-t", first,
+                             "-P", "-F", "#{pane_id}", "/bin/sleep", "900").stdout.strip()
+        self.tmux.run("set-option", "-p", "-t", side, SIDEBAR_OPTION, "mouse-test")
+        self.tmux.run("set-option", "-t", "A", "mouse", "on")
+        manager = SidebarManager(self.tmux, "mouse-test", pane_id=side, client_name=owner.name)
+        def drain(fd):
+            data = b""
+            while select.select([fd], [], [], 0.1)[0]:
+                data += os.read(fd, 65536)
+            return data
+        for _, fd in self.clients:
+            drain(fd)
+        real_run = subprocess.run
+        def host_query(args, **kwargs):
+            if args[0] == "osascript":
+                return subprocess.CompletedProcess(args, 0, "-1\n", "")
+            return real_run(args, **kwargs)
+        with patch("agent_tree.sidebar.subprocess.run", side_effect=host_query):
+            self.assertTrue(manager.repair_mouse(Event()))
+            self.assertEqual(drain(self.clients[0][1]), b"\x1b[?1003h\x1b[?1006h")
+            self.assertNotIn(b"\x1b[?1003h", drain(self.clients[1][1]))
+            self.tmux.run("set-option", "-t", "A", "mouse", "off")
+            for _, fd in self.clients:
+                drain(fd)
+            self.assertFalse(manager.repair_mouse(Event()))
+            self.assertNotIn(b"\x1b[?1003h", drain(self.clients[0][1]))
+            self.tmux.run("detach-client", "-t", owner.name)
+            self.assertFalse(manager.repair_mouse(Event()))
+        self.assertEqual(manager.client_name, owner.name)
+        self.assertIn(other.name, [c.name for c in list_clients(self.tmux)])
+        self.assertEqual(self.pane("A:first"), first)
 
     def test_native_switch_follows_and_updates_rendered_selection(self):
         owner = self.attach("A:first")

@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import subprocess
 import unittest
-from unittest.mock import patch
+from threading import Event
+from unittest.mock import Mock, patch
 
 from agent_tree.sidebar import (
     ClientContext,
@@ -167,6 +168,111 @@ class WidthTests(unittest.TestCase):
         with self.assertRaisesRegex(SidebarError, "所有权"):
             manager.sync_width()
         self.assertEqual(tmux.called("resize-pane"), [])
+
+
+class MouseRepairTests(unittest.TestCase):
+    def setUp(self):
+        self.tmux = FakeTmux()
+        self.manager = make_manager(self.tmux)
+        self.manager.client_name = "/dev/ttys016"
+        self.owner = ["inst", "@0", "0"]
+        self.client = ["/dev/ttys016", "123", "attached,focused,UTF-8", "@0", "1"]
+        def answer(*args, **kwargs):
+            fields = self.owner if args[0] == "display-message" else self.client
+            return subprocess.CompletedProcess(args, 0, SEP.join(fields), "")
+        self.tmux.run = Mock(side_effect=answer)
+        self.stopping = Event()
+
+    def script_result(self, mode="-1", code=0):
+        return subprocess.CompletedProcess([], code, mode, "")
+
+    def test_only_repairs_missing_reporting_on_the_bound_terminal(self):
+        with (patch("agent_tree.sidebar.subprocess.run", return_value=self.script_result()) as script,
+              patch("agent_tree.sidebar.os.open", return_value=42) as opened,
+              patch("agent_tree.sidebar.os.isatty", return_value=True),
+              patch("agent_tree.sidebar.os.write", return_value=16) as write,
+              patch("agent_tree.sidebar.os.close") as close):
+            self.assertTrue(self.manager.repair_mouse(self.stopping))
+        self.assertEqual(script.call_args.args[0][-1], "/dev/ttys016")
+        self.assertEqual(script.call_args.kwargs["timeout"], 2)
+        self.assertEqual(opened.call_args.args[0], "/dev/ttys016")
+        write.assert_called_once_with(42, b"\x1b[?1003h\x1b[?1006h")
+        close.assert_called_once_with(42)
+        self.assertEqual([call.args[0] for call in self.tmux.run.call_args_list],
+                         ["display-message", "list-clients"] * 2)
+
+    def test_normal_and_missing_iterm_sessions_never_write(self):
+        for mode in ("", "0", "2", "3"):
+            with (self.subTest(mode=mode),
+                  patch("agent_tree.sidebar.subprocess.run", return_value=self.script_result(mode)),
+                  patch("agent_tree.sidebar.os.open") as opened):
+                self.assertFalse(self.manager.repair_mouse(self.stopping))
+                opened.assert_not_called()
+
+    def test_off_hidden_zoomed_foreign_suspended_and_disconnected_clients_are_ignored(self):
+        cases = [(self.client, 4, "0"), (self.client, 3, "@other"),
+                 (self.client, 0, "/dev/ttys999"), (self.client, 2, "attached,suspended"),
+                 (self.client, 2, "control-mode"), (self.client, 1, "invalid"),
+                 (self.owner, 0, "other-owner"), (self.owner, 2, "1")]
+        for fields, position, value in cases:
+            old = fields[position]
+            fields[position] = value
+            with (self.subTest(value=value),
+                  patch("agent_tree.sidebar.subprocess.run") as script,
+                  patch("agent_tree.sidebar.os.open") as opened):
+                self.assertFalse(self.manager.repair_mouse(self.stopping))
+                script.assert_not_called()
+                opened.assert_not_called()
+            fields[position] = old
+        self.manager.client_name = "client-without-tty"
+        with patch("agent_tree.sidebar.subprocess.run") as script:
+            self.assertFalse(self.manager.repair_mouse(self.stopping))
+            script.assert_not_called()
+
+    def test_rechecks_client_identity_options_and_stop_after_host_query(self):
+        for mutate in (lambda: self.client.__setitem__(1, "456"),
+                       lambda: self.client.__setitem__(4, "0"),
+                       lambda: self.owner.__setitem__(0, "other"),
+                       lambda: self.stopping.set()):
+            self.setUp()
+            def query(*args, **kwargs):
+                mutate()
+                return self.script_result()
+            with (patch("agent_tree.sidebar.subprocess.run", side_effect=query),
+                  patch("agent_tree.sidebar.os.open") as opened):
+                self.assertFalse(self.manager.repair_mouse(self.stopping))
+                opened.assert_not_called()
+
+    def test_host_failure_timeout_and_unknown_mode_are_reported(self):
+        for result in (self.script_result("", 1), self.script_result("unexpected")):
+            with (patch("agent_tree.sidebar.subprocess.run", return_value=result),
+                  patch("agent_tree.sidebar.os.open") as opened):
+                with self.assertRaises(SidebarError):
+                    self.manager.repair_mouse(self.stopping)
+                opened.assert_not_called()
+        with patch("agent_tree.sidebar.subprocess.run", side_effect=subprocess.TimeoutExpired("osascript", 2)):
+            with self.assertRaisesRegex(SidebarError, "超时"):
+                self.manager.repair_mouse(self.stopping)
+
+    def test_stop_and_failed_write_close_device_without_retry(self):
+        for stop, count in ((True, 16), (False, 3)):
+            self.stopping.clear()
+            def opened(*args):
+                if stop:
+                    self.stopping.set()
+                return 42
+            with (patch("agent_tree.sidebar.subprocess.run", return_value=self.script_result()),
+                  patch("agent_tree.sidebar.os.open", side_effect=opened),
+                  patch("agent_tree.sidebar.os.isatty", return_value=True),
+                  patch("agent_tree.sidebar.os.write", return_value=count) as write,
+                  patch("agent_tree.sidebar.os.close") as close):
+                if stop:
+                    self.assertFalse(self.manager.repair_mouse(self.stopping))
+                    write.assert_not_called()
+                else:
+                    with self.assertRaisesRegex(SidebarError, "未完整写入"):
+                        self.manager.repair_mouse(self.stopping)
+                close.assert_called_once_with(42)
 
 
 class ImageHostTests(unittest.TestCase):

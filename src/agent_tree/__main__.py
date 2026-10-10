@@ -166,7 +166,9 @@ def _run_in_pane(tmux: Tmux, current_pane: str, interval: float, instance: str |
         image_origin = None
         if os.environ.get("AGENT_TREE_IMAGE_PROTOCOL") == "iterm" and manager.enable_images():
             image_origin = manager.image_origin
-        ui.run_sidebar(model, check_mouse, image_origin=image_origin)
+        mouse_guard = (manager.repair_mouse if sys.platform == "darwin"
+                       and os.environ.get("AGENT_TREE_IMAGE_PROTOCOL") == "iterm" else None)
+        ui.run_sidebar(model, check_mouse, image_origin=image_origin, mouse_guard=mouse_guard)
     except KeyboardInterrupt:
         return 0
     except Exception as exc:  # noqa: BLE001 - 侧栏界面失败不应影响用户其他 pane

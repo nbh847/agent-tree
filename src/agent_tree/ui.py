@@ -13,7 +13,7 @@ import os
 import secrets
 import sys
 from queue import Empty, Queue
-from threading import Thread
+from threading import Event, Thread
 from typing import Callable
 
 from rich.cells import cell_len
@@ -232,7 +232,8 @@ class SidebarApp(App):
     ]
 
     def __init__(self, model: SidebarModel, on_ready: Callable[[], None] | None = None,
-                 *, image_origin: Callable[[], tuple[int, int, str] | None] | None = None) -> None:
+                 *, image_origin: Callable[[], tuple[int, int, str] | None] | None = None,
+                 mouse_guard: Callable[[Event], bool] | None = None) -> None:
         super().__init__()
         self.model = model
         # 侧栏旁的用户 pane 全部关闭且无可补位会话时，由模型回调退出。
@@ -251,6 +252,11 @@ class SidebarApp(App):
         self._scan_pending = False
         self._scan_results = Queue()
         self._quitting = False
+        self.mouse_guard = mouse_guard
+        self._mouse_pending = False
+        self._mouse_results = Queue()
+        self._mouse_stopping = Event()
+        self._mouse_error = ""
 
     # ---- 布局 ----
 
@@ -281,6 +287,9 @@ class SidebarApp(App):
         self.set_interval(0.25, self._sync_host)
         self.set_interval(0.6, self._pulse_working)
         self.set_interval(0.05, self._finish_scan)
+        if self.mouse_guard is not None:
+            self._check_mouse_host()
+            self.set_interval(5, self._check_mouse_host)
 
     def _pulse_working(self) -> None:
         """仅运行中的状态点闪动；不触发发现、导航或图片上传。"""
@@ -315,6 +324,7 @@ class SidebarApp(App):
     def _finish_scan(self) -> None:
         if not self.is_running or self._quitting:
             return
+        self._finish_mouse_check()
         try:
             tree, error = self._scan_results.get_nowait()
         except Empty:
@@ -327,6 +337,32 @@ class SidebarApp(App):
         self.model.reload(result)
         if self.is_running and not self._quitting:
             self._paint()
+
+    def _check_mouse_host(self) -> None:
+        if (not self.is_running or self._quitting or self._mouse_pending
+                or self.mouse_guard is None):
+            return
+        self._mouse_pending = True
+        Thread(target=self._check_mouse_worker, daemon=True).start()
+
+    def _check_mouse_worker(self) -> None:
+        try:
+            self.mouse_guard(self._mouse_stopping)
+        except Exception as exc:
+            self._mouse_results.put(exc)
+        else:
+            self._mouse_results.put(None)
+
+    def _finish_mouse_check(self) -> None:
+        try:
+            error = self._mouse_results.get_nowait()
+        except Empty:
+            return
+        self._mouse_pending = False
+        if error is not None:
+            self.mouse_guard = None
+            self._mouse_error = f"{error}；已停用自动恢复，键盘操作可用"
+            self._paint_foot()
 
     def _sync_host(self) -> None:
         if not self.is_running or self._quitting:
@@ -373,6 +409,7 @@ class SidebarApp(App):
 
     def action_quit(self) -> None:
         self._quitting = True
+        self._mouse_stopping.set()
         self._release_images()
         self.exit()
 
@@ -398,8 +435,9 @@ class SidebarApp(App):
         self._update_text("#title", text)
 
     def _paint_foot(self) -> None:
-        if self.model.message:
-            self._update_text("#foot", Text(self.model.message, style=ERROR))
+        message = self.model.message or self._mouse_error
+        if message:
+            self._update_text("#foot", Text(message, style=ERROR))
             return
         hint = foot_text(self.model.can_navigate, max(1, self._width() - 2))
         self._update_text("#foot", Text(hint, style=DIM))
@@ -526,12 +564,14 @@ class SidebarApp(App):
 
 
 def run_sidebar(model: SidebarModel, on_ready: Callable[[], None] | None = None,
-                *, image_origin: Callable[[], tuple[int, int, str] | None] | None = None) -> None:
+                *, image_origin: Callable[[], tuple[int, int, str] | None] | None = None,
+                mouse_guard: Callable[[Event], bool] | None = None) -> None:
     """在调用者终端中运行侧栏，直到用户退出。"""
-    app = SidebarApp(model, on_ready, image_origin=image_origin)
+    app = SidebarApp(model, on_ready, image_origin=image_origin, mouse_guard=mouse_guard)
     try:
         app.run()
     finally:
+        app._mouse_stopping.set()
         # 异常退出时 driver 已停止；仍在本实例 pane 内回收剩余缓存。
         for kind in app._uploaded_images:
             sys.stdout.write(delete_sequence(app._image_ids[kind]))
