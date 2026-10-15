@@ -44,6 +44,10 @@ class SidebarError(RuntimeError):
     """侧栏创建、导航或清理失败。"""
 
 
+class MouseQueryTimeout(SidebarError):
+    """宿主查询暂时超时，可在后台稍后重试。"""
+
+
 def new_instance_id() -> str:
     """生成实例标识，用于区分多个侧栏并避免互相回收。"""
     return uuid.uuid4().hex[:12]
@@ -140,6 +144,14 @@ class SidebarManager:
         #: 退出侧栏时要把它送回原 session，否则它的原 session 会一直被留在 detached，
         #: 下次启动侧栏时因「只看附着会话」而看不到。
         self._borrowed_client: tuple[str, str, str] | None = None
+        self.stopping = Event()
+        self.observed_window: tuple[str, int] | None = None
+
+    def _write(self, *args: str, **kwargs):
+        """退出开始后不提交新的布局／导航写操作；恢复路径单独执行。"""
+        if self.stopping.is_set():
+            raise SidebarError("侧栏正在退出，已取消待执行操作")
+        return self.tmux.run(*args, **kwargs)
 
     # ---- 查询 ----
 
@@ -256,7 +268,8 @@ class SidebarManager:
         """恢复 iTerm2 与 tmux 不一致的鼠标报告；调用者必须在后台执行。
 
         不改 mouse 选项、不读取 TTY、不发送用户输入。权限拒绝或查询失败由界面
-        停用本轮运行的自动恢复，避免重复弹出授权；正常模式不写任何控制码。
+        停用本轮运行的自动恢复，避免重复弹出授权；超时允许延迟重试。
+        正常模式不写任何控制码。
         """
         if stopping.is_set():
             return False
@@ -265,9 +278,11 @@ class SidebarManager:
             return False
         try:
             result = subprocess.run(["osascript", "-e", _MOUSE_MODE_SCRIPT, context[0]],
-                                    capture_output=True, text=True, timeout=2)
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            raise SidebarError("鼠标自动恢复不可用（宿主查询失败或超时）") from exc
+                                    capture_output=True, text=True, timeout=5)
+        except subprocess.TimeoutExpired as exc:
+            raise MouseQueryTimeout("鼠标宿主查询超时（5 秒）") from exc
+        except OSError as exc:
+            raise SidebarError("鼠标自动恢复不可用（宿主查询无法启动）") from exc
         if result.returncode:
             raise SidebarError("鼠标自动恢复不可用（iTerm2 脚本访问失败）")
         mode = result.stdout.strip()
@@ -397,13 +412,14 @@ class SidebarManager:
 
     # ---- 导航 ----
 
-    def sync_width(self) -> None:
+    def sync_width(self, panes: list[list[str]] | None = None) -> None:
         """窗口宽度或 pane 集合变化后校正自建侧栏，保留手动拖动。"""
         if self.pane_id is None:
             return
         fmt = SEP.join(("#{pane_id}", "#{pane_width}", "#{window_width}", "#{window_zoomed_flag}"))
-        result = self.tmux.run("list-panes", "-t", self.pane_id, "-F", fmt)
-        panes = [line.split(SEP) for line in result.stdout.splitlines()]
+        if panes is None:
+            result = self.tmux.run("list-panes", "-t", self.pane_id, "-F", fmt)
+            panes = [line.split(SEP) for line in result.stdout.splitlines()]
         if not panes or any(len(fields) != 4 for fields in panes):
             return
         own = next((fields for fields in panes if fields[0] == self.pane_id), None)
@@ -420,7 +436,7 @@ class SidebarManager:
             if desired > 0 and desired != _to_int(own[1], 0):
                 if not self.is_mine(self.pane_id):
                     raise SidebarError("侧栏所有权已失效，未调整宽度")
-                self.tmux.run("resize-pane", "-t", self.pane_id, "-x", str(desired))
+                self._write("resize-pane", "-t", self.pane_id, "-x", str(desired))
         self._width_context = context
 
     def follow_client(self) -> str | None:
@@ -432,8 +448,18 @@ class SidebarManager:
             return None
         client = self.initiating_client()
         if client is None:
+            self.observed_window = None
             return None
-        location = self.location_of(self.pane_id)
+        # 位置、尺寸与 pane 集合共用一轮查询；正常轮询不重复 location_of。
+        tokens = ("pane_id", "pane_width", "window_width", "window_zoomed_flag",
+                  "session_name", "window_index")
+        result = self.tmux.run("list-panes", "-t", self.pane_id, "-F",
+                               SEP.join(f"#{{{token}}}" for token in tokens))
+        layout = [line.split(SEP) for line in result.stdout.splitlines()]
+        own = next((fields for fields in layout if len(fields) == 6 and fields[0] == self.pane_id), None)
+        location = Location(own[4], _to_int(own[5])) if own else None
+        self.observed_window = ((location.session_name, location.window_index)
+                                if location is not None else None)
         if location is None:
             return None
         if self._borrowed_client is not None and client.session_name != self._borrowed_client[2]:
@@ -447,12 +473,19 @@ class SidebarManager:
             width = self.tmux.run("display-message", "-p", "-t", client.pane_id, "#{window_width}").stdout.strip()
             if _to_int(width, 0) < MIN_TERMINAL_COLUMNS:
                 raise SidebarError("当前窗口过窄，无法迁入侧栏")
+            latest = self.initiating_client()
+            if latest is None or (latest.name, latest.session_name, latest.window_index, latest.pane_id) != (
+                    client.name, client.session_name, client.window_index, client.pane_id):
+                return None  # 原生切换已推进，下一轮观察新位置。
             try:
-                self.tmux.run("join-pane", "-d", "-b", "-h", "-s", self.pane_id,
+                self._write("join-pane", "-d", "-b", "-h", "-s", self.pane_id,
                               "-t", client.pane_id, "-l", self.width)
             except TmuxCommandError as exc:
                 raise SidebarError(f"跟随窗口失败：{exc}") from exc
-        self.sync_width()
+            self.observed_window = (client.session_name, client.window_index)
+            self.sync_width()
+        else:
+            self.sync_width([fields[:4] for fields in layout if len(fields) == 6])
         if client.pane_id != self.pane_id:
             self.last_target = client.pane_id
             self._synced_target = client.pane_id
@@ -488,6 +521,11 @@ class SidebarManager:
         client = self.initiating_client()
         location = self.location_of(self.pane_id)
 
+        if self.client_name is not None and client is None:
+            raise SidebarError("绑定 client 已断开，未执行导航")
+        if not self.is_mine(self.pane_id):
+            raise SidebarError("侧栏所有权已失效，未执行导航")
+
         commands: list[tuple[str, ...]] = []
         switching = client is not None and client.session_name != target_session
         switch = ("switch-client", "-c", client.name, "-t", window) if switching else None
@@ -515,7 +553,7 @@ class SidebarManager:
                 args.append(";")
             args.extend(command)
         try:
-            self.tmux.run(*args)
+            self._write(*args)
         except TmuxCommandError as exc:
             # 队列遇错停止；独占窗口时前置 switch 可能已经成功。
             if switching and any(c.name == client.name and c.session_name == target_session
@@ -525,6 +563,7 @@ class SidebarManager:
         if switching:
             self._remember_client(client, target_session)
         self.last_target = target_pane
+        self.observed_window = (target_session, target_window_index)
 
     def _alone_in_window(self, location: Location) -> bool:
         """侧栏是否是其所在 window 的唯一 pane。"""
@@ -578,7 +617,7 @@ class SidebarManager:
             self.pane_id,
             "#{window_width}" + SEP + "#{window_height}",
         ).stdout.strip().split(SEP)
-        name = self.tmux.run(
+        name = self._write(
             "new-session",
             "-d",
             "-c",

@@ -79,11 +79,34 @@ def build_tree(sessions: list[AgentSession]) -> Tree:
                 display_path=display_path,
                 label=label,
                 sessions=tuple(sorted(items, key=session_sort_key)),
+                branch=project_branch(display_path) if display_path else None,
             )
         )
 
     groups.sort(key=group_sort_key)
     return tuple(groups)
+
+
+def project_branch(path: str) -> str | None:
+    """只读本地 HEAD；随后台快照采样，不启动 git 或写入仓库。"""
+    try:
+        git_dir = Path(path) / ".git"
+        if git_dir.is_file():
+            with git_dir.open() as source:
+                target = source.read(512).strip()
+            if not target.startswith("gitdir: "):
+                return None
+            git_dir = Path(path) / target[8:]
+        with (git_dir / "HEAD").open() as source:
+            head = source.read(512).strip()
+        if head.startswith("ref: refs/heads/"):
+            branch = head[16:]
+            return branch if branch and all(char.isprintable() for char in branch) else None
+        if len(head) in (40, 64) and all(char in "0123456789abcdef" for char in head):
+            return "@" + head[:7]
+    except (OSError, UnicodeError):
+        pass
+    return None
 
 
 def session_sort_key(session: AgentSession) -> tuple[int, str, int, int, str]:

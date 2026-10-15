@@ -10,6 +10,7 @@ from unittest.mock import Mock, patch
 from agent_tree.sidebar import (
     ClientContext,
     Location,
+    MouseQueryTimeout,
     SidebarError,
     SidebarManager,
     list_clients,
@@ -98,6 +99,13 @@ class FakeTmux:
             self.locations["%NEWSESS"] = ("sNEW", 1)
             return "sNEW\n", 0
         if command == "list-panes":
+            if "#{session_name}" in args[-1] and "#{pane_width}" in args[-1]:
+                location = self.locations.get(target or "")
+                if location is None:
+                    return "", 0
+                ids = [pane for pane, loc in self.locations.items() if loc == location]
+                return "".join(SEP.join((pane, "28", self.width, "0", location[0], str(location[1]))) + "\n"
+                               for pane in ids), 0
             if "-t" in args:
                 panes = self.window_panes.get(target)
                 if panes is not None:
@@ -194,7 +202,7 @@ class MouseRepairTests(unittest.TestCase):
               patch("agent_tree.sidebar.os.close") as close):
             self.assertTrue(self.manager.repair_mouse(self.stopping))
         self.assertEqual(script.call_args.args[0][-1], "/dev/ttys016")
-        self.assertEqual(script.call_args.kwargs["timeout"], 2)
+        self.assertEqual(script.call_args.kwargs["timeout"], 5)
         self.assertEqual(opened.call_args.args[0], "/dev/ttys016")
         write.assert_called_once_with(42, b"\x1b[?1003h\x1b[?1006h")
         close.assert_called_once_with(42)
@@ -250,9 +258,13 @@ class MouseRepairTests(unittest.TestCase):
                 with self.assertRaises(SidebarError):
                     self.manager.repair_mouse(self.stopping)
                 opened.assert_not_called()
-        with patch("agent_tree.sidebar.subprocess.run", side_effect=subprocess.TimeoutExpired("osascript", 2)):
-            with self.assertRaisesRegex(SidebarError, "超时"):
+        with patch("agent_tree.sidebar.subprocess.run", side_effect=subprocess.TimeoutExpired("osascript", 5)):
+            with self.assertRaisesRegex(MouseQueryTimeout, "超时"):
                 self.manager.repair_mouse(self.stopping)
+        with patch("agent_tree.sidebar.subprocess.run", side_effect=OSError("missing executable")):
+            with self.assertRaisesRegex(SidebarError, "无法启动") as caught:
+                self.manager.repair_mouse(self.stopping)
+            self.assertNotIsInstance(caught.exception, MouseQueryTimeout)
 
     def test_stop_and_failed_write_close_device_without_retry(self):
         for stop, count in ((True, 16), (False, 3)):
@@ -338,6 +350,25 @@ class FollowClientTests(unittest.TestCase):
         self.tmux.clients = [("owner", "s0", 1, "%1", 1)]
         self.assertEqual(self.manager.follow_client(), "%1")
         self.assertEqual(self.tmux.called("join-pane"), [])
+
+    def test_stable_poll_shares_position_and_width_query(self):
+        self.tmux.clients = [("owner", "s0", 1, "%1", 1)]
+        self.manager.follow_client()
+        self.tmux.calls.clear()
+        self.manager.follow_client()
+        self.assertEqual([call[0] for call in self.tmux.calls], ["list-clients", "list-panes"])
+        self.assertEqual(self.manager.observed_window, ("s0", 1))
+
+    def test_quit_during_navigation_checks_prevents_command_submission(self):
+        original = self.manager.alive
+        def alive(pane):
+            if pane == "%1": self.manager.stopping.set()
+            return original(pane)
+        with patch.object(self.manager, "alive", side_effect=alive):
+            with self.assertRaisesRegex(SidebarError, "正在退出"):
+                self.manager.navigate("s1", 2, "%1", focus_target=True)
+        self.assertFalse(self.tmux.queues)
+        self.assertFalse(self.tmux.called("join-pane"))
 
     def test_sidebar_focus_preserves_browsing_selection(self):
         self.tmux.clients = [("owner", "s0", 1, "%9", 1)]
@@ -492,6 +523,16 @@ class LaunchTests(unittest.TestCase):
 
 
 class NavigateTests(unittest.TestCase):
+    def test_bound_client_disconnect_and_lost_ownership_reject_navigation(self):
+        self.manager.client_name = "missing-client"
+        with self.assertRaisesRegex(SidebarError, "已断开"):
+            self.manager.navigate("s1", 1, "%2")
+        self.manager.client_name = "client-1"
+        self.tmux.panes["%9"] = "other-owner"
+        with self.assertRaisesRegex(SidebarError, "所有权"):
+            self.manager.navigate("s1", 1, "%2")
+        self.assertFalse(self.tmux.queues)
+
     def test_existing_sidebar_rejects_navigation_before_any_mutation(self):
         self.tmux.panes["%8"] = "old"
         self.tmux.locations["%8"] = ("s1", 1)

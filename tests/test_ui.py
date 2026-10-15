@@ -7,6 +7,8 @@
 from __future__ import annotations
 
 import unittest
+import asyncio
+import time
 from threading import Event
 from dataclasses import replace
 from types import SimpleNamespace
@@ -72,6 +74,283 @@ def sample_rows():
 
 @unittest.skipUnless(HAVE_TEXTUAL, "需要安装 textual")
 class CurrentPaneUITests(unittest.IsolatedAsyncioTestCase):
+    async def test_logo_is_cached_once_and_falls_back_without_affecting_navigation(self):
+        model = tui.SidebarModel(lambda: build_tree([make_session()]))
+        navigated = Mock()
+        model.on_navigate = navigated
+        app = ui.SidebarApp(model, image_origin=lambda: (0, 0, "@0"))
+        async with app.run_test(size=(40, 30)) as pilot:
+            await pilot.pause()
+            self.assertEqual(app._last_text["#brand"].plain.count(PLACEHOLDER), 72)
+            self.assertIn("All agents in one.", app._last_text["#brand"].plain)
+            lines = app._last_text["#brand"].plain.count("\n")
+            app._image_origin = None
+            app._paint_brand()
+            self.assertEqual(app._last_text["#brand"].plain.count("\n"), lines)
+            app._image_origin = (0, 0, "@0")
+            app._paint_brand()
+            await pilot.click("#brand", offset=(10, 1))
+            navigated.assert_not_called()
+            driver = Mock()
+            with (patch.object(app, "_driver", driver),
+                  patch.object(ui.SidebarApp, "is_headless", new_callable=PropertyMock, return_value=False)):
+                app._paint_images()
+                self.assertEqual(driver.write.call_count, 10)
+                app._paint_images()
+                self.assertEqual(driver.write.call_count, 10)
+                app._release_images()
+                self.assertIn(ui.delete_sequence(app._logo_id), [call.args[0] for call in driver.write.call_args_list])
+                self.assertFalse(app._logo_uploaded)
+            await pilot.resize_terminal(12, 12)
+            self.assertIn("One", app._last_text["#brand"].plain)
+            self.assertNotIn(PLACEHOLDER, app._last_text["#brand"].plain)
+            self.assertGreater(app.query_one("#scroll").size.height, 0)
+
+    def test_layout_completion_invalidates_scans_even_after_partial_failure(self):
+        for kind, error in (("navigate", None), ("navigate", RuntimeError("partial")),
+                            ("new", RuntimeError("partial"))):
+            with self.subTest(kind=kind, error=error):
+                model = tui.SidebarModel(lambda: ())
+                app = ui.SidebarApp(model)
+                app._intent = 3  # 后续用户意图已排队，不得退回已完成任务的旧版本。
+                app._cached_window = ("old", 1)
+                app._job_results.put((kind, make_session(), 1, None, error))
+                with (patch.object(ui.SidebarApp, "is_running", new_callable=PropertyMock, return_value=True),
+                      patch.object(app, "_tick"), patch.object(app, "_paint")):
+                    app._finish_job()
+                self.assertGreater(app._intent, 3)
+                self.assertIsNone(app._cached_window)
+
+    def test_scan_started_during_new_session_cannot_trigger_replacement_after_completion(self):
+        old_tree = build_tree([make_session("%0")])
+        new_session = replace(make_session("%new"), session_name="new", window_index=1)
+        new_tree = build_tree([make_session("%0"), new_session])
+        model = tui.SidebarModel(lambda: new_tree)
+        model.tree = old_tree
+        model.loading = False
+        navigated = Mock()
+        model.on_navigate = navigated
+        model.sync_host = lambda: "%new"
+        model.sidebar_window = lambda: ("new", 1)
+        app = ui.SidebarApp(model)
+        # 操作已排队，扫描拿到新建前的树，但携带最新意图版本。
+        app._intent = 1
+        app._scan_pending = True
+        app._job_results.put(("new", "/project", 1, "new", None))
+        with (patch.object(ui.SidebarApp, "is_running", new_callable=PropertyMock, return_value=True),
+              patch.object(app, "_tick") as rescan,
+              patch.object(app, "_sync_host"),
+              patch.object(app, "_paint_foot"),
+              patch.object(app, "_paint")):
+            app._finish_job()
+            # 新建完成后，宿主观察先返回新窗口，旧扫描随后到达。
+            app._job_results.put(("host", None, app._intent, ("%new", None, ("new", 1)), None))
+            app._finish_job()
+            app._scan_results.put((old_tree, None, 1))
+            app._finish_scan()
+            self.assertEqual(model.generation, 0)
+            self.assertEqual(model.tree, old_tree)
+            self.assertFalse(app._jobs)
+            self.assertEqual(app._cached_window, ("new", 1))
+            navigated.assert_not_called()
+            self.assertGreaterEqual(rescan.call_count, 2)
+            # 完成后的新扫描才可用于判断补位，并能接受新会话。
+            app._scan_pending = True
+            app._scan_results.put((new_tree, None, app._intent))
+            app._finish_scan()
+            self.assertEqual(model.tree, new_tree)
+            self.assertEqual(model.active_pane, "%new")
+            self.assertFalse(app._jobs)
+            navigated.assert_not_called()
+
+    def test_old_scan_after_operation_cannot_replace_new_tree_or_trigger_exit(self):
+        tree = build_tree([make_session()])
+        model = tui.SidebarModel(lambda: tree)
+        model.tree = tree
+        model.loading = False
+        model.sidebar_window = lambda: ("s0", 1)
+        model.on_navigate = Mock()
+        app = ui.SidebarApp(model)
+        app._cached_window = ("s0", 1)
+        app._scan_pending = True
+        app._intent = 1
+        app._scan_results.put(((), None, 0))
+        with (patch.object(ui.SidebarApp, "is_running", new_callable=PropertyMock, return_value=True),
+              patch.object(app, "_tick") as rescan,
+              patch.object(app, "action_quit") as quit_app):
+            app._finish_scan()
+            rescan.assert_called_once()
+            quit_app.assert_not_called()
+        self.assertEqual(model.tree, tree)
+        self.assertEqual(model.generation, 0)
+        self.assertFalse(app._quitting)
+
+    async def test_slow_host_keeps_browsing_responsive_and_discards_old_observation(self):
+        entered, release = Event(), Event()
+        tree = build_tree([make_session("%0"), make_session("%1")])
+        def host():
+            entered.set()
+            release.wait(5)
+            return "%0"
+        model = tui.SidebarModel(lambda: tree, 60)
+        model.sync_host = host
+        model.active_pane = "%0"
+        calls = []
+        model.on_navigate = lambda session: calls.append(session.backend_target)
+        app = ui.SidebarApp(model)
+        try:
+            async with app.run_test(size=(30, 16)) as pilot:
+                await pilot.pause()
+                self.assertTrue(entered.is_set())
+                model.select(1)
+                start = time.perf_counter()
+                app.action_cursor_down()
+                app.action_activate()
+                self.assertLess(time.perf_counter() - start, 0.1)
+                self.assertEqual(model.current_session().backend_target, "%1")
+                self.assertEqual(model.active_pane, "%0")
+                app._sync_host()
+                self.assertEqual(calls, [])
+                release.set()
+                for _ in range(100):
+                    app._finish_job()
+                    if calls:
+                        break
+                    await asyncio.sleep(0.01)
+                for _ in range(100):
+                    app._finish_job()
+                    if model.active_pane == "%1":
+                        break
+                    await asyncio.sleep(0.01)
+                self.assertEqual(calls, ["%1"])
+                self.assertEqual(model.active_pane, "%1")
+                self.assertEqual(model.current_session().backend_target, "%1")
+        finally:
+            release.set()
+
+    async def test_navigation_is_serial_and_coalesces_pending_clicks(self):
+        entered, release = Event(), Event()
+        tree = build_tree([make_session(f"%{i}") for i in range(3)])
+        calls = []
+        def navigate(session):
+            calls.append(session.backend_target)
+            if len(calls) == 1:
+                entered.set()
+                release.wait(5)
+        model = tui.SidebarModel(lambda: tree, 60)
+        model.on_navigate = navigate
+        model.can_navigate = True
+        model.active_pane = "%2"
+        app = ui.SidebarApp(model)
+        try:
+            async with app.run_test(size=(30, 16)) as pilot:
+                await pilot.pause()
+                model.select(1)
+                app.action_activate()
+                for _ in range(100):
+                    if entered.is_set(): break
+                    await asyncio.sleep(0.01)
+                self.assertTrue(entered.is_set())
+                model.select(2)
+                app.action_activate()
+                model.select(3)
+                app.action_activate()
+                self.assertEqual(calls, ["%0"])
+                self.assertEqual(model.active_pane, "%2")
+                self.assertEqual(len(app._jobs), 1)
+                release.set()
+                for _ in range(100):
+                    app._finish_job()
+                    if not app._job_pending and not app._jobs: break
+                    await asyncio.sleep(0.01)
+                self.assertEqual(calls, ["%0", "%2"])
+                self.assertEqual(model.active_pane, "%2")
+                self.assertIsNone(app._navigating)
+        finally:
+            release.set()
+
+    async def test_failed_navigation_preserves_current_and_quit_cancels_pending(self):
+        entered, release = Event(), Event()
+        def navigate(session):
+            entered.set()
+            release.wait(5)
+            raise RuntimeError("target closed")
+        callback = Mock(side_effect=navigate)
+        model = tui.SidebarModel(lambda: build_tree([make_session("%0"), make_session("%1")]), 60)
+        model.on_navigate = callback
+        model.active_pane = "%0"
+        app = ui.SidebarApp(model)
+        try:
+            async with app.run_test(size=(30, 16)) as pilot:
+                await pilot.pause()
+                model.select(2)
+                app.action_activate()
+                for _ in range(100):
+                    if entered.is_set(): break
+                    await asyncio.sleep(0.01)
+                release.set()
+                for _ in range(100):
+                    app._finish_job()
+                    if not app._job_pending: break
+                    await asyncio.sleep(0.01)
+                self.assertEqual(model.active_pane, "%0")
+                self.assertIn("target closed", app._operation_error)
+                self.assertIn("target closed", app._last_text["#foot"].plain)
+                release.clear()
+                entered.clear()
+                app.action_activate()
+                for _ in range(100):
+                    if entered.is_set(): break
+                    await asyncio.sleep(0.01)
+                self.assertTrue(entered.is_set())
+                model.select(1)
+                app.action_activate()
+                app.action_quit()
+                release.set()
+                app._job_thread.join(2)
+                self.assertEqual(callback.call_count, 2)
+                self.assertFalse(app._jobs)
+                self.assertTrue(app._stopping.is_set())
+        finally:
+            release.set()
+
+    def test_current_highlight_is_independent_of_browsing_and_focus(self):
+        row = sample_rows()[1]
+        opened = ui.session_line(row, False, 30, current=True)
+        browsed = ui.session_line(row, True, 30, current=False)
+        self.assertTrue(opened.plain.startswith("▎"))
+        self.assertTrue(browsed.plain.startswith("›"))
+        self.assertNotEqual(opened, browsed)
+
+    async def test_mouse_timeout_retries_after_delay_and_clears_notice(self):
+        guard = Mock(side_effect=[ui.MouseQueryTimeout("查询超时"),
+                                  ui.MouseQueryTimeout("查询超时"), False])
+        model = tui.SidebarModel(lambda: build_tree([make_session()]))
+        app = ui.SidebarApp(model, mouse_guard=guard)
+        with patch("agent_tree.ui.monotonic", return_value=100) as clock:
+            async with app.run_test(size=(30, 16)) as pilot:
+                await pilot.pause()
+                self.assertIs(app.mouse_guard, guard)
+                self.assertIn("30 秒后重试", app._mouse_error)
+                model.reload()
+                app._paint_foot()
+                self.assertIn("30 秒后重试", app._last_text["#foot"].plain)
+                clock.return_value = 129
+                app._check_mouse_host()
+                self.assertEqual(guard.call_count, 1)
+                clock.return_value = 130
+                app._check_mouse_host()
+                await pilot.pause()
+                self.assertEqual(guard.call_count, 2)
+                self.assertEqual(app._mouse_retry_at, 160)
+                clock.return_value = 160
+                app._check_mouse_host()
+                await pilot.pause()
+                self.assertEqual(guard.call_count, 3)
+                self.assertEqual(app._mouse_error, "")
+                self.assertEqual(app._mouse_retry_at, 0)
+                self.assertNotIn("查询超时", app._last_text["#foot"].plain)
+
     async def test_blocked_mouse_host_keeps_input_responsive_and_stops_on_quit(self):
         entered, release = Event(), Event()
         def check(stopping):
@@ -157,7 +436,14 @@ class CurrentPaneUITests(unittest.IsolatedAsyncioTestCase):
 
     async def test_failed_scan_retains_tree_and_recovers(self):
         tree = build_tree([make_session()])
-        loader = Mock(side_effect=[RuntimeError("scan failed"), tree])
+        # 周期扫描可发生多次：首轮失败，此后保持可恢复的稳定快照。
+        attempts = iter([RuntimeError("scan failed")])
+        def load():
+            result = next(attempts, tree)
+            if isinstance(result, Exception):
+                raise result
+            return result
+        loader = Mock(side_effect=load)
         model = tui.SidebarModel(loader)
         model.tree = tree
         app = ui.SidebarApp(model)
@@ -216,7 +502,7 @@ class CurrentPaneUITests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("●", app.query_one("#body").render().plain)
                 row = model.rows()[1]
                 line = ui.session_line(row, True, 30, image_id=123)
-                self.assertEqual(cell_len(line.plain.split("●")[0]), column + 5)
+                self.assertEqual(cell_len(line.plain.split("●")[0]), column + ui.ICON_WIDTH + 2 + cell_len(row.session.display_name))
                 from rich.console import Console
                 color = {PaneState.WORKING: ui.SELECT_ACCENT, PaneState.BLOCKED: "#e3b341",
                          PaneState.IDLE: ui.ACCENT, PaneState.UNKNOWN: ui.DIM}[state]
@@ -240,12 +526,16 @@ class CurrentPaneUITests(unittest.IsolatedAsyncioTestCase):
             for y in range(start, start + 3):
                 strip = body.render_line(y)
                 self.assertEqual(strip.cell_length, 40)
+                x = 0
                 for segment in strip:
-                    self.assertEqual(segment.style.bgcolor.name, ui.SEL_BG)
+                    length = cell_len(segment.text)
+                    rounded_edge = x == 0 or x >= 38
+                    self.assertEqual(segment.style.bgcolor.name, ui.BG if rounded_edge else ui.SEL_BG)
                     if PLACEHOLDER in segment.text:
                         self.assertIn(segment.style.color.get_truecolor(),
                                       [(i >> 16, (i >> 8) & 255, i & 255)
-                                       for i in app._image_ids.values()])
+                                       for i in (*app._image_ids.values(), *app._decoration_ids.values())])
+                    x += length
             self.assertNotEqual(list(body.render_line(start + 3))[-1].style.bgcolor.name,
                                 ui.SEL_BG)
 
@@ -271,7 +561,7 @@ class CurrentPaneUITests(unittest.IsolatedAsyncioTestCase):
                 display(screen, frame)
 
             write_images()
-            self.assertEqual(driver.write.call_count, 5)
+            self.assertEqual(driver.write.call_count, 9)
             driver.reset_mock()
             with patch.object(app, "_paint_images", side_effect=write_images), patch.object(
                 app, "_display", side_effect=record
@@ -319,9 +609,9 @@ class CurrentPaneUITests(unittest.IsolatedAsyncioTestCase):
                 with patch.object(ui.App, "_display", side_effect=lambda *args: driver.write("TEXT_FRAME")):
                     app._display(app.screen, frame)
                     writes = [call.args[0] for call in driver.write.call_args_list]
-                    self.assertEqual(len(writes), 6)
-                    self.assertTrue(all("a=t,f=100" in write for write in writes[:5]))
-                    self.assertEqual(writes[5], "TEXT_FRAME")
+                    self.assertEqual(len(writes), 10)
+                    self.assertTrue(all("a=t,f=100" in write for write in writes[:9]))
+                    self.assertEqual(writes[9], "TEXT_FRAME")
                     driver.reset_mock()
                     app._display(app.screen, frame)
                     self.assertEqual([call.args[0] for call in driver.write.call_args_list], ["TEXT_FRAME"])
@@ -334,10 +624,11 @@ class CurrentPaneUITests(unittest.IsolatedAsyncioTestCase):
         async with app.run_test(size=(30, 12)) as pilot:
             await pilot.pause()
             text = app._last_text["#body"]
-            self.assertEqual(text.plain.count(ui.placeholder_row(1, 0)[0]), 30 * 12)
+            self.assertEqual(text.plain.count(PLACEHOLDER), 30 * 2 + 2)
             lines = text.split("\n")
-            for offset in range(3):
-                self.assertEqual(cell_len(lines[1 + offset].plain.split(ui.placeholder_row(1, 0)[0])[0]), 11)
+            self.assertEqual(cell_len(lines[2].plain.split(PLACEHOLDER)[0]), ui.ICON_COLUMN)
+            self.assertNotIn(PLACEHOLDER, lines[1].plain)
+            self.assertNotIn(PLACEHOLDER, lines[3].plain)
             self.assertIn("Codex", lines[2].plain)
             model.select(len(model.rows()) - 1)
             app._paint_body()
@@ -346,7 +637,7 @@ class CurrentPaneUITests(unittest.IsolatedAsyncioTestCase):
             model.collapsed.add(model.tree[0].key)
             app._paint_body()
             await pilot.pause()
-            self.assertNotIn(ui.placeholder_row(1, 0)[0], app._last_text["#body"].plain)
+            self.assertEqual(app._last_text["#body"].plain.count(PLACEHOLDER), 2)
             model.collapsed.clear()
             app._paint_body()
             origin[0] = None
@@ -368,16 +659,16 @@ class CurrentPaneUITests(unittest.IsolatedAsyncioTestCase):
             driver = Mock()
             with patch.object(app, "_driver", driver), patch.object(ui.SidebarApp, "is_headless", new_callable=PropertyMock, return_value=False):
                 app._paint_images()
-                self.assertEqual(driver.write.call_count, 5)
+                self.assertEqual(driver.write.call_count, 9)
                 app._paint_images()
                 app._image_origin = (0, 1, "@0")
                 app._paint_images()
                 app._image_origin = (0, 1, "@1")
                 app._paint_images()
-                self.assertEqual(driver.write.call_count, 5)
+                self.assertEqual(driver.write.call_count, 9)
                 driver.reset_mock()
                 app._release_images()
-                self.assertEqual(driver.write.call_count, 5)
+                self.assertEqual(driver.write.call_count, 9)
                 for call in driver.write.call_args_list:
                     self.assertIn("a=d,d=I,i=", call.args[0])
                 self.assertEqual(app._uploaded_images, set())
@@ -504,6 +795,29 @@ class CurrentPaneUITests(unittest.IsolatedAsyncioTestCase):
 
 @unittest.skipUnless(HAVE_TEXTUAL, "需要安装 textual")
 class RowRenderTests(unittest.TestCase):
+    def test_tree_spine_and_detail_branch_are_continuous_and_last_child_ends(self):
+        rows = sample_rows()
+        for row in rows[1:]:
+            top = ui.session_spacer(row, 40, 42, 0).plain
+            main = ui.session_line(row, False, 40, image_id=42).plain
+            bottom = ui.session_spacer(row, 40, 42, 2).plain
+            self.assertEqual(top[3], "│")
+            self.assertEqual(main[3], "└" if row.last else "├")
+            self.assertIn("└─── ", bottom)
+            self.assertEqual(bottom[3], " " if row.last else "│")
+            self.assertNotIn(PLACEHOLDER, top)
+            self.assertNotIn(PLACEHOLDER, bottom)
+
+    def test_group_uses_image_folder_and_branch_without_font_surrogates(self):
+        row = replace(sample_rows()[0], group=replace(sample_rows()[0].group, branch="master"))
+        line = ui.group_line(row, set(), False, 50, folder_id=41, branch_id=42)
+        self.assertEqual(line.plain.count(PLACEHOLDER), 4)
+        self.assertIn("◖", line.plain)
+        self.assertIn("◗", line.plain)
+        self.assertNotIn("▱", line.plain)
+        self.assertNotIn("⑂", line.plain)
+        self.assertIn("master", line.plain)
+
     def test_codebuddy_image_and_character_fallback(self):
         rows = tui.visible_rows(build_tree([make_session(agent=AgentKind.CODEBUDDY,
                                                   display="CodeBuddy", marker="B")]), set())
@@ -512,7 +826,7 @@ class RowRenderTests(unittest.TestCase):
         self.assertIn(" B", line.plain)
         self.assertNotIn(PLACEHOLDER, line.plain)
         image = ui.session_line(rows[1], False, 30, image_icons=True, image_id=42)
-        self.assertEqual(image.plain.count(PLACEHOLDER), 4)
+        self.assertEqual(image.plain.count(PLACEHOLDER), 2)
         self.assertIn("CodeBuddy", image.plain)
 
     def test_pi_image_and_character_fallback(self):
@@ -523,7 +837,7 @@ class RowRenderTests(unittest.TestCase):
         self.assertIn(" P", line.plain)
         self.assertNotIn(PLACEHOLDER, line.plain)
         image = ui.session_line(rows[1], False, 30, image_icons=True, image_id=42)
-        self.assertEqual(image.plain.count(PLACEHOLDER), 4)
+        self.assertEqual(image.plain.count(PLACEHOLDER), 2)
         self.assertIn("Pi", image.plain)
 
     def test_five_image_ids_stay_within_protocol_limit(self):
@@ -531,7 +845,10 @@ class RowRenderTests(unittest.TestCase):
             app = ui.SidebarApp(tui.SidebarModel(lambda: build_tree([])))
         self.assertIn(AgentKind.CODEBUDDY, app._image_ids)
         self.assertEqual(len(set(app._image_ids.values())), 5)
-        self.assertEqual(max(app._image_ids.values()), 0xFFFFFF)
+        self.assertEqual(max(app._image_ids.values()), 0xFFFFFA)
+        self.assertEqual(app._logo_id, 0xFFFFFB)
+        self.assertEqual(max(app._decoration_ids.values()), 0xFFFFFF)
+        self.assertNotIn(app._logo_id, app._image_ids.values())
 
     def test_image_placeholder_is_four_cells_and_keeps_id_color_when_selected(self):
         row = sample_rows()[1]
@@ -539,7 +856,7 @@ class RowRenderTests(unittest.TestCase):
         from rich.console import Console
         for selected in (False, True):
             line = ui.session_line(row, selected, 20, image_icons=True, image_id=image_id)
-            self.assertEqual(line.plain.count(PLACEHOLDER), 4)
+            self.assertEqual(line.plain.count(PLACEHOLDER), 2)
             self.assertEqual(cell_len(line.plain), 20)
             style = line.get_style_at_offset(Console(), line.plain.index(PLACEHOLDER))
             self.assertEqual(style.color.get_truecolor(), (0x12, 0x34, 0x56))
@@ -552,9 +869,9 @@ class RowRenderTests(unittest.TestCase):
             image = ui.session_line(row, True, 20, image_icons=True)
             fallback = ui.session_line(row, False, 20)
             column = ui.session_icon_column(row, 20)
-            self.assertEqual(image.plain[column:column + 4], "    ")
-            self.assertTrue(image.plain[5:].startswith(row.session.display_name))
-            self.assertIn(row.session.marker, fallback.plain[column:column + 4])
+            self.assertEqual(image.plain[column:column + ui.ICON_WIDTH], " " * ui.ICON_WIDTH)
+            self.assertTrue(image.plain[ui.ICON_COLUMN + ui.ICON_WIDTH + 1:].startswith(row.session.display_name))
+            self.assertIn(row.session.marker, fallback.plain[column:column + ui.ICON_WIDTH])
             self.assertIn(row.session.display_name, image.plain)
             self.assertEqual(cell_len(image.plain), 20)
         unknown = tui.visible_rows(build_tree([make_session(agent=AgentKind.UNKNOWN, display="未知", marker="?")]), set())[1]
@@ -579,31 +896,31 @@ class RowRenderTests(unittest.TestCase):
 
     def test_group_line_shortens_home_path(self):
         rows = sample_rows()
-        line = ui.group_line(rows[0], set(), False, 40)
+        line = ui.group_line(rows[0], set(), False, 65)
         self.assertIn("~/workspace", line.plain)
 
     def test_collapsed_group_uses_collapsed_mark(self):
         rows = sample_rows()
         line = ui.group_line(rows[0], {"/Users/mac/workspace/agent-tree"}, False, 40)
-        self.assertTrue(line.plain.startswith(tui.COLLAPSED_MARK))
+        self.assertTrue(line.plain.startswith(" " + tui.COLLAPSED_MARK))
 
     def test_session_lines_use_tree_connectors(self):
         rows = sample_rows()
         first = ui.session_line(rows[1], False, 40)
         last = ui.session_line(rows[2], False, 40)
-        self.assertTrue(first.plain.startswith("  " + ui.CONNECTOR_MID), repr(first.plain))
-        self.assertTrue(last.plain.startswith("  " + ui.CONNECTOR_LAST), repr(last.plain))
+        self.assertTrue(first.plain.startswith("   " + ui.CONNECTOR_MID), repr(first.plain))
+        self.assertTrue(last.plain.startswith("   " + ui.CONNECTOR_LAST), repr(last.plain))
 
     def test_session_name_uses_normal_text_color(self):
         rows = sample_rows()
         codex = ui.session_line(rows[1], False, 40)
         shell = ui.session_line(rows[2], False, 40)
         self.assertIn(
-            ui.TEXT,
+            "bold " + ui.TEXT,
             [str(span.style) for span in codex.spans if codex.plain[span.start : span.end] == "Codex"],
         )
         self.assertIn(
-            ui.TEXT,
+            "bold " + ui.TEXT,
             [str(span.style) for span in shell.spans if shell.plain[span.start : span.end] == "Shell"],
         )
 

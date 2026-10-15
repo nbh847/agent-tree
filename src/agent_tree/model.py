@@ -68,6 +68,7 @@ class DirectoryGroup:
     display_path: str
     label: str
     sessions: tuple[AgentSession, ...]
+    branch: str | None = None
 
 
 #: 登录目录，树结构为「目录组 → 会话」两层。

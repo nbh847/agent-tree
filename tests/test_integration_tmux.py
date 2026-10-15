@@ -384,7 +384,7 @@ class FollowIntegrationTests(unittest.TestCase):
                 selected = False
             elif "48;2;" in token:
                 selected = any(bg in token for bg in (
-                    "48;2;33;38;45", "48;2;37;37;37"))
+                    "48;2;50;50;68", "48;2;51;51;51"))
         return False
 
     def test_mouse_repair_only_writes_bound_client_and_respects_mouse_off(self):
@@ -408,17 +408,23 @@ class FollowIntegrationTests(unittest.TestCase):
             if args[0] == "osascript":
                 return subprocess.CompletedProcess(args, 0, "-1\n", "")
             return real_run(args, **kwargs)
-        with patch("agent_tree.sidebar.subprocess.run", side_effect=host_query):
+        with (patch("agent_tree.sidebar.subprocess.run", side_effect=host_query),
+              patch("agent_tree.sidebar.os.write", wraps=os.write) as written):
             self.assertTrue(manager.repair_mouse(Event()))
-            self.assertEqual(drain(self.clients[0][1]), b"\x1b[?1003h\x1b[?1006h")
+            # tmux 可同时输出重绘；精确核对本程序写入，再确认协议到达绑定 TTY。
+            written.assert_called_once()
+            self.assertEqual(written.call_args.args[1], b"\x1b[?1003h\x1b[?1006h")
+            self.assertIn(b"\x1b[?1003h\x1b[?1006h", drain(self.clients[0][1]))
             self.assertNotIn(b"\x1b[?1003h", drain(self.clients[1][1]))
             self.tmux.run("set-option", "-t", "A", "mouse", "off")
             for _, fd in self.clients:
                 drain(fd)
             self.assertFalse(manager.repair_mouse(Event()))
+            self.assertEqual(written.call_count, 1)
             self.assertNotIn(b"\x1b[?1003h", drain(self.clients[0][1]))
             self.tmux.run("detach-client", "-t", owner.name)
             self.assertFalse(manager.repair_mouse(Event()))
+            self.assertEqual(written.call_count, 1)
         self.assertEqual(manager.client_name, owner.name)
         self.assertIn(other.name, [c.name for c in list_clients(self.tmux)])
         self.assertEqual(self.pane("A:first"), first)
@@ -436,7 +442,7 @@ class FollowIntegrationTests(unittest.TestCase):
         manager = SidebarManager(self.tmux, "probe")
         side = self.wait_for(lambda: next(iter(manager.owned_panes()), None))
         self.side = side
-        self.wait_for(lambda: "会话" in self.capture(side) and "Shell" in self.capture(side))
+        self.wait_for(lambda: "当前任务" in self.capture(side) and "Shell" in self.capture(side))
         width = self.tmux.run("display-message", "-p", "-t", side, "#{pane_width}").stdout
 
         # prefix+n 走 tmux 原生绑定，侧栏没有发起导航。
@@ -506,7 +512,7 @@ class FollowIntegrationTests(unittest.TestCase):
             return data
         kinds = (AgentKind.CODEX, AgentKind.CLAUDE_CODE, AgentKind.CODEBUDDY, AgentKind.PI, AgentKind.SHELL)
         frame = output(20, until=lambda data: all(payload(kind).encode() in data for kind in kinds)
-                       and data.count(b"U=1,q=2") == 5 and PLACEHOLDER.encode() in data)
+                       and data.count(b"U=1,q=2") == 10 and PLACEHOLDER.encode() in data)
         for kind in kinds:
             self.assertEqual(frame.count(payload(kind).encode()), 1, f"{kind.value} PNG 只上传一次")
         self.assertEqual(self.tmux.run("show-options", "-p", "-t", side,
@@ -515,8 +521,8 @@ class FollowIntegrationTests(unittest.TestCase):
                          "allow-passthrough off")
         self.assertEqual(self.tmux.run("show-options", "-p", "-t", first,
                                       "allow-passthrough").stdout.strip(), "")
-        image_ids = re.findall(rb"_Ga=t,f=100,t=d,i=(\d+),q=2;", frame)
-        self.assertEqual(len(set(image_ids)), 5)
+        image_ids = re.findall(rb"_Ga=t,f=100,t=d,i=(\d+),q=2(?:,m=[01])?;", frame)
+        self.assertEqual(len(set(image_ids)), 10)
         self.assertIn(PLACEHOLDER, self.capture(side), "tmux 必须保存图片位置标记")
         self.tmux.run("send-keys", "-t", side, "j")
         selected = output(1)

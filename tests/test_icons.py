@@ -2,13 +2,47 @@
 
 import base64
 import struct
+import re
 import unittest
 
-from agent_tree.icons import PLACEHOLDER, delete_sequence, image_sequence, payload, placeholder_row
+from agent_tree.icons import (PLACEHOLDER, LOGO_WIDTH, delete_sequence, image_sequence,
+                              logo_payload, logo_sequence, payload, placeholder_row)
+from agent_tree.icons import decoration_payload, decoration_sequence
 from agent_tree.model import AgentKind
 
 
 class IconTests(unittest.TestCase):
+    def test_folder_branch_assets_are_transparent_and_use_single_row_canvas(self):
+        for kind in ("folder", "branch"):
+            data = base64.b64decode(decoration_payload(kind))
+            self.assertEqual(struct.unpack(">II", data[16:24]), (32, 32))
+            self.assertEqual(data[25], 6)  # RGBA
+            self.assertIn("c=2,r=1,U=1", decoration_sequence(kind, 42))
+        self.assertEqual(decoration_payload("unknown"), "")
+        self.assertEqual(decoration_sequence("folder", 0), "")
+
+    def test_card_edges_use_three_rows_and_icon_placement_does_not_crop(self):
+        for kind in ("card-left", "card-right"):
+            data = base64.b64decode(decoration_payload(kind))
+            self.assertEqual(struct.unpack(">II", data[16:24]), (16, 108))
+            self.assertEqual(data[25], 6)
+            self.assertIn("c=1,r=3,U=1", decoration_sequence(kind, 42))
+        self.assertNotIn(",y=", image_sequence(AgentKind.CODEX, 42))
+
+    def test_logo_chunking_and_placeholder_columns_preserve_payload(self):
+        data = base64.b64decode(logo_payload(), validate=True)
+        self.assertEqual(struct.unpack(">II", data[16:24]), (640, 160))
+        sequence = logo_sequence(42)
+        chunks = re.findall(r"_G([^;]+);([A-Za-z0-9+/=]+)", sequence)
+        self.assertEqual("".join(chunk for _, chunk in chunks), logo_payload())
+        self.assertTrue(all(len(chunk) <= 4096 for _, chunk in chunks))
+        self.assertTrue(all(len(chunk) % 4 == 0 for _, chunk in chunks[:-1]))
+        self.assertTrue(chunks[-1][0].endswith("m=0"))
+        self.assertIn("c=24,r=3,U=1,q=2", sequence)
+        self.assertEqual(placeholder_row(42, 0, LOGO_WIDTH).count(PLACEHOLDER), LOGO_WIDTH)
+        self.assertEqual(logo_sequence(0), "")
+        self.assertEqual(placeholder_row(42, 0, LOGO_WIDTH + 1), "")
+
     def test_assets_are_small_png_thumbnails(self):
         for kind in (AgentKind.CODEX, AgentKind.CLAUDE_CODE, AgentKind.CODEBUDDY, AgentKind.PI, AgentKind.SHELL):
             data = base64.b64decode(payload(kind), validate=True)
@@ -20,7 +54,7 @@ class IconTests(unittest.TestCase):
         sequence = image_sequence(AgentKind.CODEX, 0x123456)
         self.assertTrue(sequence.startswith("\x1bPtmux;\x1b\x1b_Ga=t,f=100,t=d,i=1193046,q=2;"))
         self.assertIn(payload(AgentKind.CODEX), sequence)
-        self.assertIn("a=p,i=1193046,c=4,r=3,U=1,q=2", sequence)
+        self.assertIn("a=p,i=1193046,c=2,r=1,U=1,q=2", sequence)
         self.assertEqual(sequence.count("\x1bPtmux;"), 2)
         self.assertNotIn("1337", sequence)
         self.assertNotIn("\x1b\x1b[", sequence)
@@ -35,7 +69,7 @@ class IconTests(unittest.TestCase):
 
     def test_placeholders_encode_each_cell_and_high_id_byte(self):
         for row, mark in enumerate(("\u0305", "\u030d", "\u030e")):
-            line = placeholder_row(42, row)
+            line = placeholder_row(42, row, 4)
             self.assertEqual(line.count(PLACEHOLDER), 4)
             for column, column_mark in enumerate(("\u0305", "\u030d", "\u030e", "\u0310")):
                 self.assertEqual(line[column * 4:column * 4 + 4],

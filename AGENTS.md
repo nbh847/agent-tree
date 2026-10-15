@@ -17,7 +17,7 @@
 - `src/agent_tree/`：源码，Python 3.14。仅界面层依赖第三方库 textual；其余模块只用标准库。`__main__.py` 入口；`model.py` 数据模型；`tmux.py` tmux 访问层；`processes.py` 进程快照与进程树；`discovery.py` 身份识别与会话发现；`grouping.py` 按 Git 仓库根目录分组与树；`tui.py` 侧栏纯逻辑（行、折叠、选中、刷新、回调），不依赖界面框架；`ui.py` textual 界面；`sidebar.py` 自建侧栏生命周期、导航与新建会话。
 - `tests/`：标准库 `unittest` 单元测试与隔离的 tmux 集成测试；依赖 textual 的用例在缺依赖时自动跳过。
 - `src/agent_tree/states.py`：当前 CLI 输入区状态匹配；只在内存中读取屏幕，不读取历史，不从静默或进程存活推断完成。
-- `src/agent_tree/icons.py`：PNG 资源、Kitty Graphics 缓存透传与图片位置标记编码；`src/agent_tree/assets/` 保存小尺寸 PNG 与来源说明，运行时不依赖图像处理库。
+- `src/agent_tree/icons.py`：会话、目录、分支、圆角图标与顶部 Logo 的 PNG 资源、Kitty Graphics 缓存透传、分块传输与图片位置标记编码；`src/agent_tree/assets/` 保存 PNG 与来源说明，运行时不依赖图像处理库。Git 分支展示元数据由 `grouping.py` 在后台快照中只读 HEAD，不能在绘制时启动 git 或扫描仓库。
 - `pyproject.toml`：包声明与命令入口；运行时依赖仅 `textual`。
 - `.venv/`：本地虚拟环境，装有 textual；`bin/agent-tree` 优先使用它。不入库。
 
@@ -44,6 +44,6 @@ bin/agent-tree                                               # 在 tmux 内启�
 
 集成测试只使用独立 socket 与自建 pane，结束后清理，不接触用户会话。为不破坏用户鼠标与布局设置，侧栏对 tmux 选项的修改必须限定窗口级并恢复；图片透传仅在本实例自建 pane 上设置 pane 级 `allow-passthrough`，随该 pane 回收，不修改用户 pane 或窗口选项。textual 需要所在 pane 的 client 附着才会渲染，验证侧栏外观时须让该 session 有 client 附着（例如 `script -q /dev/null tmux -L <socket> attach -t <session>`）。
 
-会话扫描在后台生成快照，界面模型、导航与绘制只能在界面线程更新；单实例最多一轮扫描在途。外部查询必须有超时，扫描退出与失败边界、导航侧栏冲突的验证说明见 `docs/architecture.md` 与 `docs/validation.md`。
+会话扫描在后台生成快照，界面模型与绘制只能在界面线程更新；单实例最多一轮扫描在途。宿主观察、导航、新建与布局调整共用单个在途后台任务，写操作串行执行；宿主回调不修改界面模型。操作意图变化后丢弃旧观察与发现结果，旧扫描不得据新位置触发关闭补位；退出取消待处理任务、阻止后续布局写入，等待在途操作收尾后再恢复 client。外部查询必须有超时，失败边界与验证说明见 `docs/architecture.md` 与 `docs/validation.md`。
 
-iTerm2 鼠标自动恢复在独立后台线程执行，只修复绑定 client 的临时协议状态；写入前再次核对 client PID、自建 pane 所有权、当前窗口和 mouse 开启状态，退出后停止。宿主脚本失败时停用检查，不重复请求权限；不通过透传广播到共享窗口的其他 client，不改 mouse 配置。实现与限制见 `docs/architecture.md`。
+iTerm2 鼠标自动恢复在独立后台线程执行，只修复绑定 client 的临时协议状态；写入前再次核对 client PID、自建 pane 所有权、当前窗口和 mouse 开启状态，退出后停止。宿主查询超时延迟重试，成功后清除超时提示；脚本访问或权限失败时停用检查，不重复请求权限。不通过透传广播到共享窗口的其他 client，不改 mouse 配置。实现与限制见 `docs/architecture.md`。

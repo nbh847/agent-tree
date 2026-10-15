@@ -13,6 +13,7 @@ from agent_tree.grouping import (
     find_project_root,
     group_sort_key,
     session_sort_key,
+    project_branch,
 )
 from agent_tree.model import (
     UNKNOWN_DIR_KEY,
@@ -58,6 +59,25 @@ def make_session(
 
 
 class ProjectRootGroupingTests(unittest.TestCase):
+    def test_branch_metadata_handles_repo_worktree_detached_and_invalid_head(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo, worktree = root / "repo", root / "worktree"
+            (repo / ".git").mkdir(parents=True)
+            worktree.mkdir()
+            head = repo / ".git" / "HEAD"
+            head.write_text("ref: refs/heads/feature/sidebar\n")
+            (worktree / ".git").write_text("gitdir: ../repo/.git\n")
+            self.assertEqual(project_branch(str(repo)), "feature/sidebar")
+            self.assertEqual(project_branch(str(worktree)), "feature/sidebar")
+            head.write_text("a" * 40 + "\n")
+            self.assertEqual(project_branch(str(repo)), "@aaaaaaa")
+            head.write_text("ref: refs/heads/unsafe\x1bname\n")
+            self.assertIsNone(project_branch(str(repo)))
+            head.write_bytes(b"\xff")
+            self.assertIsNone(project_branch(str(repo)))
+            self.assertIsNone(project_branch(str(root / "missing")))
+
     """仓库内按 git 根聚合；不在仓库内时退回工作目录。"""
 
     def test_sessions_in_same_repo_group_under_repo_root(self):

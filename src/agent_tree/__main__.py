@@ -126,10 +126,7 @@ def _run_in_pane(tmux: Tmux, current_pane: str, interval: float, instance: str |
 
         供模型判断侧栏旁的用户 pane 是否全部关闭（如旁边的 shell 执行 exit）。
         """
-        location = manager.location_of(current_pane)
-        if location is None:
-            return None
-        return location.session_name, location.window_index
+        return manager.observed_window
 
     model.sidebar_window = sidebar_window
 
@@ -140,27 +137,23 @@ def _run_in_pane(tmux: Tmux, current_pane: str, interval: float, instance: str |
         落到那个 shell／Agent 上。需要在同一 session 内换 window 时侧栏跟着迁移；
         跨 session 时会切换发起 client（原 session 仍保留在列表里可切回）。
         """
-        try:
-            manager.navigate(
-                session.session_name,
-                session.window_index,
-                session.backend_target,
-                focus_target=True,
-            )
-        except (SidebarError, TmuxError) as exc:
-            model.message = str(exc)
-        else:
-            model.message = ""
+        manager.navigate(
+            session.session_name,
+            session.window_index,
+            session.backend_target,
+            focus_target=True,
+        )
 
     model.on_navigate = open_target
     model.on_handoff = open_target
     model.on_new_session = manager.new_session
 
-    def check_mouse() -> None:
+    def check_mouse() -> str | None:
         # 放在占位帧之后执行：tmux 查询较慢，不应拖慢侧栏首次出现。
         location = manager.location_of(current_pane)
         if location is not None and not tmux.mouse_enabled(location.session_name):
-            model.message = "鼠标点击未启用（tmux mouse off）；键盘操作可用"
+            return "鼠标点击未启用（tmux mouse off）；键盘操作可用"
+        return None
 
     try:
         image_origin = None
@@ -168,7 +161,8 @@ def _run_in_pane(tmux: Tmux, current_pane: str, interval: float, instance: str |
             image_origin = manager.image_origin
         mouse_guard = (manager.repair_mouse if sys.platform == "darwin"
                        and os.environ.get("AGENT_TREE_IMAGE_PROTOCOL") == "iterm" else None)
-        ui.run_sidebar(model, check_mouse, image_origin=image_origin, mouse_guard=mouse_guard)
+        ui.run_sidebar(model, check_mouse, image_origin=image_origin, mouse_guard=mouse_guard,
+                       stopping=manager.stopping)
     except KeyboardInterrupt:
         return 0
     except Exception as exc:  # noqa: BLE001 - 侧栏界面失败不应影响用户其他 pane
