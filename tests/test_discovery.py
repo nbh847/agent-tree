@@ -406,3 +406,41 @@ class DiscoverTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ActivityTests(unittest.TestCase):
+    def test_first_observation_unknown_changes_update_and_idle_keeps_time(self):
+        tracker = discovery.ActivityTracker()
+        key = ('host', '%1', 100)
+        self.assertIsNone(tracker.observe(key, 'ready', 1000))
+        self.assertIsNone(tracker.observe(key, 'ready', 1001))
+        self.assertEqual(tracker.observe(key, 'working', 1002), 1002)
+        self.assertEqual(tracker.observe(key, 'working', 1003), 1002)
+        self.assertEqual(tracker.observe(key, None, 1004), 1002)
+        self.assertEqual(tracker.observe(key, 'ready', 1005), 1005)
+
+    def test_missing_screen_removed_pane_and_reused_id_do_not_invent_activity(self):
+        tracker = discovery.ActivityTracker()
+        key = ('host', '%1', 100)
+        self.assertIsNone(tracker.observe(key, None, 1000))
+        self.assertIsNone(tracker.observe(key, 'ready', 1001))
+        self.assertEqual(tracker.observe(key, 'busy', 1002), 1002)
+        self.assertIsNone(tracker.observe(('host', '%1', 200), 'new process', 1003))
+        tracker.retain(set())
+        self.assertIsNone(tracker.observe(key, 'new pane', 1004))
+
+    def test_discovery_tracks_shell_activity_and_propagates_timestamp(self):
+        pane = make_pane()
+        tracker = discovery.ActivityTracker()
+        tmux = FakeTmux([pane])
+        tmux.screen = mock.Mock(side_effect=['ready', 'changed', 'changed'])
+        with mock.patch.object(processes, 'snapshot', return_value={}), mock.patch.object(
+            discovery.time, 'time', side_effect=[1000, 1002, 1004]
+        ):
+            first = discovery.discover(tmux, 'host', activity=tracker)[0]
+            changed = discovery.discover(tmux, 'host', activity=tracker)[0]
+            idle = discovery.discover(tmux, 'host', activity=tracker)[0]
+        self.assertIsNone(first.last_activity_at)
+        self.assertEqual(changed.last_activity_at, 1002)
+        self.assertEqual(idle.last_activity_at, 1002)
+        self.assertEqual(tmux.screen.call_count, 3)

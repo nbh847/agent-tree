@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 import secrets
 import sys
+from datetime import datetime
 from collections import deque
 from queue import Empty, Queue
 from threading import Event, Thread
@@ -214,6 +215,19 @@ def session_line(row: Row, selected: bool, width: int, *, image_icons: bool = Fa
     return _highlight(line, selected, width, current=current, edge=1, card_ids=card_ids)
 
 
+def activity_label(timestamp: float | None) -> str:
+    if timestamp is None or timestamp <= 0:
+        return "暂无活动记录"
+    try:
+        last = datetime.fromtimestamp(timestamp)
+    except (ValueError, OverflowError, OSError):
+        return "暂无活动记录"
+    today = datetime.now()
+    pattern = "%H:%M" if last.date() == today.date() else (
+        "%m-%d %H:%M" if last.year == today.year else "%Y-%m-%d %H:%M")
+    return "最后活动 · " + last.strftime(pattern)
+
+
 def session_spacer(row: Row, width: int, image_id: int | None, canvas_row: int, *, selected: bool = False,
                    current: bool | None = None, card_ids: tuple[int, int] | None = None) -> Text:
     line = Text("   │" if canvas_row == 0 or not row.last else "    ", style=FAINT)
@@ -221,9 +235,9 @@ def session_spacer(row: Row, width: int, image_id: int | None, canvas_row: int, 
     if canvas_row == 2:
         line.append("  └─── ", style=FAINT)
         start = ICON_COLUMN + ICON_WIDTH + 1 if column is not None else ICON_COLUMN
-        # 第二行复用真实 tmux 标识，不伪造创建时间或任务历史。
+        # 活动时间来自后台屏幕变化观察，不使用扫描时间或内部编号。
         line.append(" " * max(0, start - cell_len(line.plain)))
-        detail = Text(f"{row.session.session_name} · {row.session.window_name}", style=DIM)
+        detail = Text(activity_label(row.session.last_activity_at), style=DIM)
         detail.truncate(max(0, width - cell_len(line.plain)), overflow="ellipsis")
         line.append_text(detail)
     _pad(line, "", width)

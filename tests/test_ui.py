@@ -795,6 +795,21 @@ class CurrentPaneUITests(unittest.IsolatedAsyncioTestCase):
 
 @unittest.skipUnless(HAVE_TEXTUAL, "需要安装 textual")
 class RowRenderTests(unittest.TestCase):
+    def test_detail_displays_last_activity_instead_of_internal_session_numbers(self):
+        from datetime import datetime, timedelta
+        now = datetime.now().replace(hour=9, minute=19, second=0, microsecond=0)
+        row = sample_rows()[1]
+        row = replace(row, session=replace(row.session, session_name="18", window_name="zsh",
+                                          last_activity_at=now.timestamp()))
+        line = ui.session_spacer(row, 42, None, 2).plain
+        self.assertIn("最后活动 · 09:19", line)
+        self.assertNotIn("18 · zsh", line)
+        self.assertEqual(ui.activity_label(None), "暂无活动记录")
+        self.assertEqual(ui.activity_label(float("nan")), "暂无活动记录")
+        self.assertEqual(ui.activity_label(-1), "暂无活动记录")
+        older = now - timedelta(days=1)
+        self.assertIn(older.strftime("%m-%d %H:%M"), ui.activity_label(older.timestamp()))
+
     def test_tree_spine_and_detail_branch_are_continuous_and_last_child_ends(self):
         rows = sample_rows()
         for row in rows[1:]:

@@ -14,7 +14,7 @@
 - `docs/validation.md`：宿主与功能验证记录，保存环境版本、验证过程、结果与未覆盖范围。
 - `goals/`：按时间命名的施工清单，记录目标、边界、检查点、验收与交付；当前清单不代表 Goal 已启动。
 - `.tmp/<task-slug>/`：临时调研及验证产物，不作为运行依赖。
-- `src/agent_tree/`：源码，Python 3.14。仅界面层依赖第三方库 textual；其余模块只用标准库。`__main__.py` 入口；`model.py` 数据模型；`tmux.py` tmux 访问层；`processes.py` 进程快照与进程树；`discovery.py` 身份识别与会话发现；`grouping.py` 按 Git 仓库根目录分组与树；`tui.py` 侧栏纯逻辑（行、折叠、选中、刷新、回调），不依赖界面框架；`ui.py` textual 界面；`sidebar.py` 自建侧栏生命周期、导航与新建会话。
+- `src/agent_tree/`：源码，Python 3.14。仅界面层依赖第三方库 textual；其余模块只用标准库。`__main__.py` 入口；`model.py` 数据模型；`tmux.py` tmux 访问层；`processes.py` 进程快照与进程树；`discovery.py` 身份识别、会话发现与当前屏幕摘要活动时间；`grouping.py` 按 Git 仓库根目录分组与树；`tui.py` 侧栏纯逻辑（行、折叠、选中、刷新、回调），不依赖界面框架；`ui.py` textual 界面；`sidebar.py` 自建侧栏生命周期、导航与新建会话。
 - `tests/`：标准库 `unittest` 单元测试与隔离的 tmux 集成测试；依赖 textual 的用例在缺依赖时自动跳过。
 - `src/agent_tree/states.py`：当前 CLI 输入区状态匹配；只在内存中读取屏幕，不读取历史，不从静默或进程存活推断完成。
 - `src/agent_tree/icons.py`：会话、目录、分支、圆角图标与顶部 Logo 的 PNG 资源、Kitty Graphics 缓存透传、分块传输与图片位置标记编码；`src/agent_tree/assets/` 保存 PNG 与来源说明，运行时不依赖图像处理库。Git 分支展示元数据由 `grouping.py` 在后台快照中只读 HEAD，不能在绘制时启动 git 或扫描仓库。

@@ -102,6 +102,7 @@ def _run_in_pane(tmux: Tmux, current_pane: str, interval: float, instance: str |
     #: 本次侧栏运行期间曾附着过的 session。导航会 switch-client 使原 session 断开，
     #: 记住它们，避免「选走之后原窗口从列表消失」。
     keep_sessions: set[str] = set()
+    activity = discovery.ActivityTracker()
 
     def refresh() -> Tree:
         # host_key 只解析一次：socket 路径在会话期间不变，省去每次刷新的额外 tmux 调用。
@@ -113,6 +114,7 @@ def _run_in_pane(tmux: Tmux, current_pane: str, interval: float, instance: str |
             generation=next(generations),
             only_attached=True,
             keep_sessions=keep_sessions,
+            activity=activity,
         )
         return build_tree(sessions)
 

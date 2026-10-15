@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import time
+import hashlib
 from dataclasses import dataclass
 
 from . import processes
@@ -147,12 +148,34 @@ def is_plain_shell(pane: PaneInfo, procs_in_tree: list[processes.ProcInfo]) -> b
     return bool(names) and names <= SHELL_NAMES
 
 
+class ActivityTracker:
+    """记录本次运行中观察到的屏幕变化；首次采样不冒充历史活动。"""
+
+    def __init__(self) -> None:
+        self._panes: dict[tuple[str, str, int], tuple[bytes, float | None]] = {}
+
+    def observe(self, key: tuple[str, str, int], screen: str | None, now: float) -> float | None:
+        previous = self._panes.get(key)
+        if screen is None:
+            return previous[1] if previous else None
+        digest = hashlib.sha256(screen.encode("utf-8")).digest()
+        last = previous[1] if previous else None
+        if previous is not None and digest != previous[0]:
+            last = now
+        self._panes[key] = digest, last
+        return last
+
+    def retain(self, keys: set[tuple[str, str, int]]) -> None:
+        self._panes = {key: value for key, value in self._panes.items() if key in keys}
+
+
 def discover(
     tmux: Tmux,
     host_key: str,
     generation: int = 0,
     only_attached: bool = False,
     keep_sessions: set[str] | None = None,
+    activity: ActivityTracker | None = None,
 ) -> list[AgentSession]:
     """发现当前 server 内所有 pane（含普通 shell）。
 
@@ -172,6 +195,8 @@ def discover(
     procs = processes.snapshot()
     observed_at = time.time()
 
+    if activity is not None:
+        activity.retain({(host_key, pane.pane_id, pane.pane_pid) for pane in panes if not pane.is_sidebar})
     sessions: list[AgentSession] = []
     for pane in panes:
         if pane.is_sidebar:
@@ -202,8 +227,13 @@ def discover(
         state, state_source = PaneState.UNKNOWN, STATE_SOURCE_NONE
         # 历史启动命令仅用于身份，不足以证明当前仍是该 Agent 的界面。
         live_signature, _, _ = identify("", procs_in_tree)
-        if live_signature is not None and hasattr(tmux, "screen"):
-            state, state_source = detect_state(agent, tmux.screen(pane.pane_id))
+        screen = None
+        if (live_signature is not None or activity is not None) and hasattr(tmux, "screen"):
+            screen = tmux.screen(pane.pane_id)
+        if live_signature is not None:
+            state, state_source = detect_state(agent, screen)
+        last_activity = (activity.observe((host_key, pane.pane_id, pane.pane_pid), screen, observed_at)
+                         if activity is not None else None)
         sessions.append(
             AgentSession(
                 session_key=f"{host_key}#{pane.pane_id}",
@@ -228,6 +258,7 @@ def discover(
                 window_index=pane.window_index,
                 window_name=pane.window_name,
                 pane_index=pane.pane_index,
+                last_activity_at=last_activity,
             )
         )
     return sessions

@@ -58,6 +58,7 @@ class AgentSession:
     window_index: int
     window_name: str
     pane_index: int
+    last_activity_at: float | None = None
 
 
 @dataclass(frozen=True)
