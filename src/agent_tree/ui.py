@@ -64,7 +64,8 @@ CONNECTOR_LAST = "└──┬ "
 FOOT_NAVIGATE_LADDER = (
     HINT_NAVIGATE,
     "↑↓ 选择 · Enter 进入 · n 新建 · q 退出",
-    "↑↓ 选择 · Enter 进入 · q 退出",
+    "↑↓ 选择 Enter 进入 n 新建 q 退出",
+    "Enter 进入 · n 新建 · q 退出",
     "q 退出",
 )
 FOOT_BROWSE_LADDER = (
@@ -268,7 +269,7 @@ def _highlight(line: Text, selected: bool, width: int, *, current: bool | None =
 
 
 def foot_text(can_navigate: bool, width: int) -> str:
-    """按可用宽度挑选底部提示：完整 → 紧凑 → 只留退出键。"""
+    """按可用宽度挑选提示：先压缩分隔，再省略选择提示，最后只留退出键。"""
     ladder = FOOT_NAVIGATE_LADDER if can_navigate else FOOT_BROWSE_LADDER
     for text in ladder:
         if cell_len(text) + 1 <= width:

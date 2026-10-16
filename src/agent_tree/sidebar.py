@@ -21,7 +21,7 @@ from threading import Event
 from .tmux import SEP, SIDEBAR_OPTION, Tmux, TmuxCommandError
 
 #: 侧栏默认宽度。
-DEFAULT_WIDTH = "24%"
+DEFAULT_WIDTH = "20%"
 #: 小于该列数时拒绝创建侧栏，避免侧栏本身无法使用。
 MIN_TERMINAL_COLUMNS = 60
 

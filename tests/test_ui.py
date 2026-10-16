@@ -964,11 +964,21 @@ class RowRenderTests(unittest.TestCase):
 
     def test_foot_hint_degrades_with_width(self):
         self.assertEqual(ui.foot_text(True, 80), tui.HINT_NAVIGATE)
-        self.assertIn("n 新建", ui.foot_text(True, 40))
-        narrow = ui.foot_text(True, 30)
-        self.assertLessEqual(cell_len(narrow), 30)
+        # 20% 默认宽度（178 列窗口 = 35 列 pane，底部可用 33 列）保留四组操作。
+        compact = ui.foot_text(True, 33)
+        for hint in ("↑↓ 选择", "Enter 进入", "n 新建", "q 退出"):
+            self.assertIn(hint, compact)
+        self.assertLessEqual(cell_len(compact) + 1, 33)
+        self.assertNotIn("↑↓", ui.foot_text(True, 32))
+        for width in (40, 33, 29):
+            self.assertIn("n 新建", ui.foot_text(True, width), f"可用宽度 {width} 列时漏掉了 n 新建")
+        # 除仅退出键的最后一档外，任何档位都不得丢掉新建会话。
+        for text in ui.FOOT_NAVIGATE_LADDER[:-1]:
+            self.assertIn("n 新建", text, text)
+        self.assertEqual(ui.foot_text(True, 28), ui.FOOT_NAVIGATE_LADDER[-1])
         self.assertEqual(ui.foot_text(True, 12), ui.FOOT_NAVIGATE_LADDER[-1])
         self.assertEqual(ui.foot_text(False, 80), tui.HINT_BROWSE)
+        self.assertIn("q 退出", ui.foot_text(False, 33))
 
 
 if __name__ == "__main__":

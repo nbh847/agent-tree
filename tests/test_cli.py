@@ -22,10 +22,10 @@ class ParserTests(unittest.TestCase):
         self.assertIsNone(args.instance)
 
     def test_help_text_renders_without_error(self):
-        # 允许 help 中含百分号；渲染时不得抛 ValueError
+        # 允许 help 中含百分号；渲染时不得抛 ValueError，且要印出当前默认宽度。
         text = build_parser().format_help()
         self.assertIn("--width", text)
-        self.assertIn("24%", text)
+        self.assertIn(DEFAULT_WIDTH, text)
 
     def test_width_accepts_percent_and_absolute(self):
         parser = build_parser()

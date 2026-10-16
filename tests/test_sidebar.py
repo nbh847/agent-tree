@@ -336,7 +336,7 @@ class FollowClientTests(unittest.TestCase):
     def test_follows_bound_client_without_switching_clients_or_focus(self):
         self.assertEqual(self.manager.follow_client(), "%1")
         self.assertEqual(self.tmux.called("join-pane"), [
-            ("join-pane", "-d", "-b", "-h", "-s", "%9", "-t", "%1", "-l", "24%")])
+            ("join-pane", "-d", "-b", "-h", "-s", "%9", "-t", "%1", "-l", "20%")])
         self.assertEqual(self.tmux.called("switch-client"), [])
         self.assertEqual(self.tmux.called("select-pane"), [])
         self.assertEqual(self.tmux.called("select-window"), [])
@@ -555,7 +555,7 @@ class NavigateTests(unittest.TestCase):
         self.manager.navigate("s1", 1, "%2")
         self.assertEqual(len(self.tmux.queues), 1)
         self.assertEqual(self.tmux.queues[0], (
-            "join-pane", "-d", "-b", "-h", "-s", "%9", "-t", "s1:1", "-l", "24%",
+            "join-pane", "-d", "-b", "-h", "-s", "%9", "-t", "s1:1", "-l", "20%",
             ";", "switch-client", "-c", "client-1", "-t", "s1:1",
             ";", "select-pane", "-t", "%9",
         ))
